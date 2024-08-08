@@ -377,7 +377,7 @@ func NewBigIntByRaw(x *big.Int) *hexutil.Big {
 // BlockSummary includes block header and a list of transaction hashes
 type BlockSummary struct {
 	BlockHeader
-	//Transactions []Hash `json:"transactions"`
+	Transactions []types.Hash `json:"transactions"`
 }
 
 // rlpEncodableBlockSummary block summary struct used for rlp encoding

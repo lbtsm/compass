@@ -3,6 +3,7 @@ package conflux
 import (
 	"context"
 	"fmt"
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/mapprotocol/compass/internal/constant"
 	"github.com/mapprotocol/compass/internal/tx"
@@ -131,30 +132,31 @@ func syncHeaderToMap(m *chain.Maintainer, latestBlock *big.Int) error {
 
 func assembleProof(m *chain.Messenger, log *types.Log, proofType int64, toChainID uint64) (*msg.Message, error) {
 	var (
-		err     error
-		pivot   = big.NewInt(0)
-		message msg.Message
-		orderId = log.Data[:32]
-		method  = m.GetMethod(log.Topics[0])
+		err      error
+		pivot    = big.NewInt(0)
+		message  msg.Message
+		orderId  = log.Data[:32]
+		method   = m.GetMethod(log.Topics[0])
+		txsHash  []common.Hash
+		receipts []*types.Receipt
 	)
 
-	if proofType != constant.ProofTypeOfOracle {
-		pivot, err = nearestPivot(m, new(big.Int).SetUint64(log.BlockNumber+conflux.DeferredExecutionEpochs))
+	switch proofType {
+	case constant.ProofTypeOfOracle:
+		txsHash, err = mapprotocol.GetTxsByBn(m.Conn.Client(), big.NewInt(int64(log.BlockNumber)))
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("unable to get tx hashes Logs: %w", err)
 		}
+		receipts, err = tx.GetReceiptsByTxsHash(m.Conn.Client(), txsHash)
+	default:
+		pivot, err = nearestPivot(m, new(big.Int).SetUint64(log.BlockNumber+conflux.DeferredExecutionEpochs))
+		m.Log.Info("getPivot", "pivot", pivot)
+	}
+	if err != nil {
+		return nil, err
 	}
 
-	txsHash, err := mapprotocol.GetTxsByBn(m.Conn.Client(), big.NewInt(int64(log.BlockNumber)))
-	if err != nil {
-		return nil, fmt.Errorf("unable to get tx hashes Logs: %w", err)
-	}
-	receipts, err := tx.GetReceiptsByTxsHash(m.Conn.Client(), txsHash)
-	if err != nil {
-		return nil, fmt.Errorf("unable to get receipts hashes Logs: %w", err)
-	}
-	m.Log.Info("getPivot", "pivot", pivot)
-	payload, err := conflux.AssembleProof(cli, pivot.Uint64(), uint64(proofType), method, m.Cfg.Id, log, receipts)
+	payload, err := conflux.AssembleProof(cli, m.Conn, pivot.Uint64(), uint64(proofType), method, m.Cfg.Id, log, receipts)
 	if err != nil {
 		return nil, fmt.Errorf("unable to Parse Log: %w", err)
 	}
@@ -211,7 +213,7 @@ func updateHeaders(m *chain.Maintainer, startNumber, endNumber uint64) error {
 		}
 
 		m.Log.Info("updateHeaders ", "height", i, "idx", idx)
-		ele := conflux.MustRLPEncodeBlock(blk)
+		ele := conflux.MustRLPEncodeBlock(blk, nil)
 		headers[idx] = ele
 		idx--
 		if idx != -1 && i != startNumber {

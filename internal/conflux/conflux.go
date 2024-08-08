@@ -2,6 +2,7 @@ package conflux
 
 import (
 	"context"
+	"github.com/mapprotocol/compass/core"
 	"github.com/mapprotocol/compass/internal/constant"
 	"github.com/mapprotocol/compass/internal/proof"
 	"io"
@@ -20,6 +21,8 @@ import (
 )
 
 const DeferredExecutionEpochs uint64 = 5
+
+const cip112Epoch = uint64(79050000)
 
 var ErrTransactionExecutionFailed = errors.New("transaction execution failed")
 
@@ -119,13 +122,67 @@ func ConvertCommittee(ledger *LedgerInfoWithSignatures) (LedgerInfoLibEpochState
 	}, true
 }
 
-func MustRLPEncodeBlock(block *BlockSummary) []byte {
-	val := ConvertBlock(block)
-	encoded, err := rlp.EncodeToBytes(val)
+func MustRLPEncodeBlock(block *BlockSummary, baseFee *big.Int) []byte {
+	var adaptive uint64
+	if block.Adaptive {
+		adaptive = 1
+	}
+
+	var referees []common.Hash
+	for _, v := range block.RefereeHashes {
+		referees = append(referees, *v.ToCommonHash())
+	}
+
+	list := []interface{}{
+		block.ParentHash.ToCommonHash(),
+		block.Height.ToInt(),
+		block.Timestamp.ToInt(),
+		block.Miner.MustGetCommonAddress(),
+		block.TransactionsRoot.ToCommonHash(),
+		block.DeferredStateRoot.ToCommonHash(),
+		block.DeferredReceiptsRoot.ToCommonHash(),
+		block.DeferredLogsBloomHash.ToCommonHash(),
+		block.Blame,
+		block.Difficulty.ToInt(),
+		adaptive,
+		block.GasLimit.ToInt(),
+		referees,
+		block.Nonce.ToInt(),
+	}
+
+	if block.PosReference != nil {
+		list = append(list, rlpEncodeOptionSome(*block.PosReference.ToCommonHash()))
+	}
+
+	if block.BaseFeePerGas != nil {
+		if baseFee == nil {
+			panic("EVM base fee is empty")
+		}
+
+		list = append(list, rlpEncodeOptionSome([]interface{}{
+			block.BaseFeePerGas.ToInt(),
+			baseFee,
+		}))
+	}
+
+	for _, v := range block.Custom {
+		if block.EpochNumber.ToInt().Uint64() >= cip112Epoch {
+			list = append(list, v.ToBytes())
+		} else {
+			list = append(list, rlp.RawValue(v.ToBytes()))
+		}
+	}
+
+	encoded, err := rlp.EncodeToBytes(list)
 	if err != nil {
 		panic(err)
 	}
+
 	return encoded
+}
+
+func rlpEncodeOptionSome(v interface{}) interface{} {
+	return []interface{}{v}
 }
 
 func ConvertBlock(block *BlockSummary) BlockRlp {
@@ -177,7 +234,7 @@ func (header BlockRlp) EncodeRLP(w io.Writer) error {
 	return rlp.Encode(w, list)
 }
 
-func AssembleProof(client *Client, pivot, proofType uint64, method string, fId msg.ChainId, log *ethtypes.Log,
+func AssembleProof(client *Client, ethCli core.Connection, pivot, proofType uint64, method string, fId msg.ChainId, log *ethtypes.Log,
 	receipts []*ethtypes.Receipt) ([]byte, error) {
 	var (
 		ret, input []byte
@@ -190,7 +247,7 @@ func AssembleProof(client *Client, pivot, proofType uint64, method string, fId m
 		if err != nil {
 			return nil, err
 		}
-		//ek := util.Key2Hex(key, len(prf))
+
 		receipt, err := mapprotocol.GetTxReceipt(receipts[log.TxIndex])
 		ret, err = proof.Oracle(log.BlockNumber, receipt, key, prf, fId, method, 0, mapprotocol.ProofAbi)
 	default:
@@ -236,7 +293,27 @@ func AssembleProof(client *Client, pivot, proofType uint64, method string, fId m
 				return nil, errors.WithMessagef(err, "Failed to get block summary by epoch %v", i)
 			}
 
-			headers = append(headers, MustRLPEncodeBlock(block))
+			if block == nil {
+				return nil, errors.Errorf("Core block not found by epoch %v", i)
+			}
+
+			var evmBlock *ethtypes.Block
+			if block.BaseFeePerGas != nil { // check
+				evmBlock, err = ethCli.Client().BlockByNumber(context.Background(), big.NewInt(int64(i)))
+				if err != nil {
+					return nil, errors.WithMessagef(err, "Failed to get evm block by block number %v", i)
+				}
+
+				if evmBlock == nil {
+					return nil, errors.Errorf("Evm block not found by block number %v", i)
+				}
+
+				if evmBlock.BaseFee() == nil {
+					return nil, errors.Errorf("There is no base fee in evm block by number %v", i)
+				}
+			}
+
+			headers = append(headers, MustRLPEncodeBlock(block, evmBlock.BaseFee()))
 		}
 
 		prf := &mpt.TypesReceiptProof{
