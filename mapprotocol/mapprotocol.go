@@ -7,10 +7,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"math/big"
+
 	"github.com/mapprotocol/compass/internal/constant"
 	"github.com/mapprotocol/compass/pkg/contract"
 	nearclient "github.com/mapprotocol/near-api-go/pkg/client"
-	"math/big"
 
 	"github.com/mapprotocol/near-api-go/pkg/client/block"
 

@@ -4,8 +4,9 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"github.com/mapprotocol/atlas/helper/bls"
 	"math/big"
+
+	"github.com/mapprotocol/atlas/helper/bls"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
@@ -57,9 +58,9 @@ func (ec *Client) getMAPBlock(ctx context.Context, method string, args ...interf
 	if head.TxHash == types.EmptyRootHash && len(body.Transactions) > 0 {
 		return nil, fmt.Errorf("server returned non-empty transaction list but block header indicates no transactions")
 	}
-	if head.TxHash != types.EmptyRootHash && len(body.Transactions) == 0 {
-		return nil, fmt.Errorf("server returned empty transaction list but block header indicates transactions")
-	}
+	// if head.TxHash != types.EmptyRootHash && len(body.Transactions) == 0 {
+	// 	return nil, fmt.Errorf("server returned empty transaction list but block header indicates transactions")
+	// }
 	return &body, nil
 }
 

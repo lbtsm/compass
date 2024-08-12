@@ -3,12 +3,14 @@ package conflux
 import (
 	"context"
 	"fmt"
+	"math/big"
+	"strings"
+	"time"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/mapprotocol/compass/internal/constant"
 	"github.com/mapprotocol/compass/internal/tx"
-	"math/big"
-	"time"
 
 	"github.com/ChainSafe/log15"
 	"github.com/ethereum/go-ethereum/common/hexutil"
@@ -187,7 +189,7 @@ func nearestPivot(m *chain.Messenger, height *big.Int) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := mapprotocol.GetDataByManager(mapprotocol.MethodOFinalizedState, big.NewInt(int64(m.Cfg.Id)), pack)
+	data, err := mapprotocol.GetDataByManager(mapprotocol.MethodOFinalizedState, pack)
 	if err != nil {
 		return nil, err
 	}
@@ -213,7 +215,26 @@ func updateHeaders(m *chain.Maintainer, startNumber, endNumber uint64) error {
 		}
 
 		m.Log.Info("updateHeaders ", "height", i, "idx", idx)
-		ele := conflux.MustRLPEncodeBlock(blk, nil)
+		var baseFee *big.Int
+		if blk.BaseFeePerGas != nil { // check
+
+			evmBlock, err := m.Conn.Client().MAPBlockByNumber(context.Background(), big.NewInt(int64(i)))
+			// evmBlock, err := mapprotocol.GetTxsByBn(m.Conn.Client(), big.NewInt(int64(i)))
+			if err != nil {
+				return errors.WithMessagef(err, "Failed to get evm block by block number %v", i)
+			}
+
+			if evmBlock == nil {
+				return errors.Errorf("Evm block not found by block number %v", i)
+			}
+
+			if evmBlock.BaseFeePerGas == "" {
+				return errors.Errorf("There is no base fee in evm block by number %v", i)
+			}
+			fmt.Println("evmBlock.BaseFeePerGas ------------------------- ", evmBlock.BaseFeePerGas)
+			baseFee, _ = big.NewInt(0).SetString(strings.TrimPrefix(evmBlock.BaseFeePerGas, "0x"), 16)
+		}
+		ele := conflux.MustRLPEncodeBlock(blk, baseFee)
 		headers[idx] = ele
 		idx--
 		if idx != -1 && i != startNumber {
