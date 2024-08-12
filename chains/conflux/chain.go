@@ -189,7 +189,7 @@ func nearestPivot(m *chain.Messenger, height *big.Int) (*big.Int, error) {
 	if err != nil {
 		return nil, err
 	}
-	data, err := mapprotocol.GetDataByManager(mapprotocol.MethodOFinalizedState, pack)
+	data, err := mapprotocol.GetDataByManager(mapprotocol.MethodOFinalizedState, big.NewInt(int64(m.Cfg.Id)), pack)
 	if err != nil {
 		return nil, err
 	}
