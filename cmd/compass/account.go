@@ -17,6 +17,33 @@ import (
 	"github.com/urfave/cli/v2"
 )
 
+var importFlags = []cli.Flag{
+	config.EthereumImportFlag,
+	config.PrivateKeyFlag,
+	config.PasswordFlag,
+	config.KeystorePathFlag,
+	config.TronFlag,
+	config.TronKeyNameFlag,
+}
+
+var accountCommand = cli.Command{
+	Name:  "accounts",
+	Usage: "manage bridge keystore",
+	Description: "The accounts command is used to manage the bridge keystore.\n" +
+		"\tTo import a tron private key file: compass accounts import --privateKey private_key",
+	Subcommands: []*cli.Command{
+		{
+			Action: wrapHandler(handleImportCmd),
+			Name:   "import",
+			Usage:  "import bridge keystore",
+			Flags:  importFlags,
+			Description: "The import subcommand is used to import a keystore for the bridge.\n" +
+				"\tA path to the keystore must be provided\n" +
+				"\tUse --privateKey to create a keystore from a provided private key.",
+		},
+	},
+}
+
 // dataHandler is a struct which wraps any extra data our CMD functions need that cannot be passed through parameters
 type dataHandler struct {
 	datadir string

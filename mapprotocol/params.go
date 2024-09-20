@@ -1,6 +1,7 @@
 package mapprotocol
 
 import (
+	"github.com/mapprotocol/compass/core"
 	"math/big"
 	"strings"
 
@@ -103,6 +104,7 @@ var (
 
 var (
 	OnlineChaId = map[msg.ChainId]string{}
+	OnlineConn  = map[msg.ChainId]core.Connection{}
 )
 
 var (

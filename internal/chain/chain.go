@@ -13,6 +13,7 @@ import (
 	"github.com/mapprotocol/compass/pkg/contract"
 	"github.com/mapprotocol/compass/pkg/ethclient"
 	"github.com/pkg/errors"
+	"math/big"
 )
 
 type Chain struct {
@@ -21,6 +22,16 @@ type Chain struct {
 	writer *Writer           // The writer of the Chain
 	stop   chan<- int
 	listen chains.Listener // The listener of this Chain
+}
+
+func NewApi(chainCfg *core.ChainConfig, createConn core.CreateConn) (core.Connection, error) {
+	conn := createConn(chainCfg.Endpoint, true, nil, nil, big.NewInt(1000000), big.NewInt(1000000), 1)
+	err := conn.Connect()
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
 }
 
 func New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error, role mapprotocol.Role,

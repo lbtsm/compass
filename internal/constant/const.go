@@ -98,12 +98,15 @@ const (
 
 const (
 	MerlinChainId     = 4200
+	KlaytnChainId     = 8217
+	MaticChainId      = 127
 	CfxChainId        = 1030
 	EthChainId        = 5
 	ZkSyncChainId     = 324
 	B2ChainId         = 223
 	OpChainId         = 10
 	BaseChainId       = 8453
+	BscChainId        = 56
 	BlastChainId      = 81457
 	ArbChainId        = 421614
 	ArbTestnetChainId = 42161

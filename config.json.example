@@ -18,7 +18,7 @@
       "name": "pri-eth",
       "type": "ethereum",
       "id": "34434",
-      "endpoint": "http://18.138.248.113:8545",
+      "endpoint": "http://127.0.0.1:8545",
       "from": "0xE0DC8D7f134d0A79019BE1232fd4b2013a64fCD6",
       "opts": {
         "mcs": "0xcfc80beddb70f12af6da768fc30e396889dfce26",

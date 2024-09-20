@@ -1,0 +1,48 @@
+{
+  "mapchain": {
+    "id": "212",
+    "endpoint": "http://18.142.54.137:7445",
+    "from": "0xE0DC8D7f134d0A79019BE1232fd4b2013a64fCD6",
+    "opts": {
+      "mcs": "0x0ac4611305254cdd257beC56CB79CBeC720Cd02D"
+    }
+  },
+  "chains": [
+    {
+      "name": "pri-eth",
+      "type": "ethereum",
+      "id": "34434",
+      "endpoint": "http://127.0.0.1:8545",
+      "opts": {
+        "mcs": "0xcfc80beddb70f12af6da768fc30e396889dfce26"
+      }
+    },
+    {
+      "name": "matic",
+      "type": "matic",
+      "id": "80001",
+      "endpoint": "https://rpc-mumbai.maticvigil.com",
+      "opts": {
+        "mcs": "0x688f3Ef5f728995a9DcB299DAEC849CA2E49ddE1"
+      }
+    },
+    {
+      "name": "klaytn",
+      "type": "klaytn",
+      "id": "1001",
+      "endpoint": "https://public-node-api.klaytnapi.com/v1/baobab",
+      "opts": {
+        "mcs": "0x8105ECe4ce08B6B6449539A5db23e23b973DfA8f"
+      }
+    },
+    {
+      "name": "eth2",
+      "type": "eth2",
+      "id": "5",
+      "endpoint": "http://18.142.54.137:8545",
+      "opts": {
+        "mcs": "0xae194f5d43ccab94c6dea994ff19001708d0e2eb"
+      }
+    }
+  ]
+}
