@@ -47,20 +47,20 @@ func (m *Maintainer) sync() error {
 	m.Log.Info("Polling Blocks...", "block", currentBlock)
 
 	if m.Cfg.SyncToMap {
-		syncedHeight, err := mapprotocol.Get2MapHeight(m.Cfg.Id)
-		if err != nil {
-			m.Log.Error("Get synced Height failed", "err", err)
-			return err
-		}
-
-		m.Log.Info("Check Block Sync Status...", "synced", syncedHeight, "currentBlock", currentBlock)
-		m.syncedHeight = syncedHeight
-
-		if syncedHeight.Cmp(currentBlock) != 0 {
-			currentBlock.Add(syncedHeight, new(big.Int).SetInt64(m.height))
-			m.Log.Info("SyncedHeight is higher or lower than currentHeight, so let currentHeight = syncedHeight",
-				"syncedHeight", syncedHeight, "currentBlock", currentBlock)
-		}
+		//syncedHeight, err := mapprotocol.Get2MapHeight(m.Cfg.Id)
+		//if err != nil {
+		//	m.Log.Error("Get synced Height failed", "err", err)
+		//	return err
+		//}
+		//
+		//m.Log.Info("Check Block Sync Status...", "synced", syncedHeight, "currentBlock", currentBlock)
+		//m.syncedHeight = syncedHeight
+		//
+		//if syncedHeight.Cmp(currentBlock) != 0 {
+		//	currentBlock.Add(syncedHeight, new(big.Int).SetInt64(m.height))
+		//	m.Log.Info("SyncedHeight is higher or lower than currentHeight, so let currentHeight = syncedHeight",
+		//		"syncedHeight", syncedHeight, "currentBlock", currentBlock)
+		//}
 	} else if m.Cfg.Id == m.Cfg.MapChainID {
 		minHeight := big.NewInt(0)
 		for cId, height := range mapprotocol.SyncOtherMap {
@@ -96,17 +96,17 @@ func (m *Maintainer) sync() error {
 				continue
 			}
 
-			if big.NewInt(0).Sub(latestBlock, currentBlock).Cmp(m.BlockConfirmations) == -1 {
-				m.Log.Debug("Block not ready, will retry", "current", currentBlock, "latest", latestBlock)
-				time.Sleep(constant.QueryRetryInterval)
-				continue
-			}
-			difference := new(big.Int).Sub(currentBlock, latestBlock)
-			if difference.Int64() > 0 {
-				m.Log.Info("chain online blockNumber less than local latestBlock, waiting...", "chainBlcNum", latestBlock,
-					"localBlock", currentBlock, "waiting", difference.Int64())
-				time.Sleep(constant.BlockRetryInterval * time.Duration(difference.Int64()))
-			}
+			//if big.NewInt(0).Sub(latestBlock, currentBlock).Cmp(m.BlockConfirmations) == -1 {
+			//	m.Log.Debug("Block not ready, will retry", "current", currentBlock, "latest", latestBlock)
+			//	time.Sleep(constant.QueryRetryInterval)
+			//	continue
+			//}
+			//difference := new(big.Int).Sub(currentBlock, latestBlock)
+			//if difference.Int64() > 0 {
+			//	m.Log.Info("chain online blockNumber less than local latestBlock, waiting...", "chainBlcNum", latestBlock,
+			//		"localBlock", currentBlock, "waiting", difference.Int64())
+			//	time.Sleep(constant.BlockRetryInterval * time.Duration(difference.Int64()))
+			//}
 
 			if m.Cfg.Id == m.Cfg.MapChainID && len(m.Cfg.SyncChainIDList) > 0 {
 				err = m.syncHeaderToMap(m, currentBlock)
@@ -117,6 +117,7 @@ func (m *Maintainer) sync() error {
 					continue
 				}
 			} else if currentBlock.Cmp(m.syncedHeight) == 1 {
+				currentBlock = big.NewInt(43592400)
 				err = m.syncHeaderToMap(m, currentBlock)
 				if err != nil {
 					m.Log.Error("Failed to listen header for block", "block", currentBlock, "err", err)

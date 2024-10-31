@@ -1,7 +1,10 @@
 package bsc
 
 import (
+	"bytes"
 	"fmt"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/rlp"
 	"math/big"
 	"strconv"
 
@@ -27,53 +30,98 @@ func New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error,
 		chain.OptOfOracleHandler(chain.DefaultOracleHandler))
 }
 
+const (
+	BLSPublicKeyLength = 48
+	BLSSignatureLength = 96
+)
+
+type VoteAttestation struct {
+	VoteAddressSet ValidatorsBitSet // The bitset marks the voted validators.
+	AggSignature   BLSSignature     // The aggregated BLS signature of the voted validators' signatures.
+	Data           *VoteData        // The vote data for fast finality.
+	Extra          []byte           // Reserved for future usage.
+}
+
+type BLSPublicKey [BLSPublicKeyLength]byte
+type BLSSignature [BLSSignatureLength]byte
+type ValidatorsBitSet uint64
+
+type VoteData struct {
+	SourceNumber uint64      // The source block number should be the latest justified block number.
+	SourceHash   common.Hash // The block hash of the source block.
+	TargetNumber uint64      // The target block number which validator wants to vote for.
+	TargetHash   common.Hash // The block hash of the target block.
+}
+
 func syncHeaderToMap(m *chain.Maintainer, latestBlock *big.Int) error {
-	remainder := big.NewInt(0).Mod(new(big.Int).Sub(latestBlock, new(big.Int).SetInt64(mapprotocol.HeaderCountOfBsc-1)),
-		big.NewInt(mapprotocol.EpochOfBsc))
+	remainder := big.NewInt(0).Mod(latestBlock, big.NewInt(mapprotocol.EpochOfBsc))
 	if remainder.Cmp(mapprotocol.Big0) != 0 {
+		fmt.Println("------------------------")
 		return nil
 	}
-	// synced height check
-	syncedHeight, err := mapprotocol.Get2MapHeight(m.Cfg.Id)
-	if err != nil {
-		m.Log.Error("Get current synced Height failed", "err", err)
-		return err
-	}
-	if latestBlock.Cmp(syncedHeight) <= 0 {
-		m.Log.Info("CurrentBlock less than synchronized headerHeight", "synced height", syncedHeight,
-			"current height", latestBlock)
-		return nil
-	}
-	m.Log.Info("Find sync block", "current height", latestBlock)
-	headers := make([]*ethclient.BscHeader, mapprotocol.HeaderCountOfBsc)
-	for i := 0; i < mapprotocol.HeaderCountOfBsc; i++ {
-		headerHeight := new(big.Int).Sub(latestBlock, new(big.Int).SetInt64(int64(i)))
-		header, err := m.Conn.Client().BscHeaderByNumber(m.Cfg.Endpoint, headerHeight)
-		if err != nil {
-			return err
-		}
-		headers[mapprotocol.HeaderCountOfBsc-i-1] = header
-	}
+	//// synced height check
+	//syncedHeight, err := mapprotocol.Get2MapHeight(m.Cfg.Id)
+	//if err != nil {
+	//	m.Log.Error("Get current synced Height failed", "err", err)
+	//	return err
+	//}
+	//if latestBlock.Cmp(syncedHeight) <= 0 {
+	//	m.Log.Info("CurrentBlock less than synchronized headerHeight", "synced height", syncedHeight,
+	//		"current height", latestBlock)
+	//	return nil
+	//}
+	// step1: 获取当前block，解析extraData
+	if latestBlock.Int64()%mapprotocol.EpochOfBsc == 0 {
 
-	params := make([]bsc.Header, 0, len(headers))
-	for _, h := range headers {
-		params = append(params, bsc.ConvertHeader(h))
 	}
-	input, err := mapprotocol.Bsc.Methods[mapprotocol.MethodOfGetHeadersBytes].Inputs.Pack(params)
+	headerHeight := new(big.Int).Add(latestBlock, new(big.Int).SetInt64(int64(1)))
+	header, err := m.Conn.Client().BscHeaderByNumber(m.Cfg.Endpoint, headerHeight)
 	if err != nil {
-		m.Log.Error("Failed to abi pack", "err", err)
 		return err
 	}
 
-	id := big.NewInt(0).SetUint64(uint64(m.Cfg.Id))
-	msgpayload := []interface{}{id, input}
-	message := msg.NewSyncToMap(m.Cfg.Id, m.Cfg.MapChainID, msgpayload, m.MsgCh)
-
-	err = m.Router.Send(message)
+	//ret := struct {
+	//	ValidatorsBitSet interface{}
+	//	BLSSignature interface{}
+	//}{}
+	var extra VoteAttestation
+	m.Log.Info("Find sync block", "current height", headerHeight, "extra", extra, "hex", common.Bytes2Hex(header.Extra), "len", len(header.Extra))
+	err = rlp.Decode(bytes.NewBuffer(header.Extra[33:len(header.Extra)-65]), &extra)
 	if err != nil {
-		m.Log.Error("Subscription error: failed to route message", "err", err)
 		return err
 	}
+
+	m.Log.Info("Find sync block", "current height", headerHeight, "extra", extra, "hex", common.Bytes2Hex(header.Extra), "len", len(header.Extra))
+	//headers := make([]*ethclient.BscHeader, 0)
+
+	//for i := 0; i < mapprotocol.HeaderCountOfBsc; i++ {
+	//	headerHeight := new(big.Int).Sub(latestBlock, new(big.Int).SetInt64(int64(i)))
+	//	header, err := m.Conn.Client().BscHeaderByNumber(m.Cfg.Endpoint, headerHeight)
+	//	if err != nil {
+	//		return err
+	//	}
+	//	headers[mapprotocol.HeaderCountOfBsc-i-1] = header
+	//}
+	//
+	//params := make([]bsc.Header, 0, len(headers))
+	//for _, h := range headers {
+	//	params = append(params, bsc.ConvertHeader(h))
+	//}
+	//input, err := mapprotocol.Bsc.Methods[mapprotocol.MethodOfGetHeadersBytes].Inputs.Pack(params)
+	//if err != nil {
+	//	m.Log.Error("Failed to abi pack", "err", err)
+	//	return err
+	//}
+
+	//id := big.NewInt(0).SetUint64(uint64(m.Cfg.Id))
+	//msgpayload := []interface{}{id, input}
+	//message := msg.NewSyncToMap(m.Cfg.Id, m.Cfg.MapChainID, msgpayload, m.MsgCh)
+
+	//err = m.Router.Send(message)
+	//if err != nil {
+	//	m.Log.Error("Subscription error: failed to route message", "err", err)
+	//	return err
+	//}
 
 	err = m.WaitUntilMsgHandled(1)
 	if err != nil {

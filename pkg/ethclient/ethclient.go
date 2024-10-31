@@ -751,6 +751,7 @@ func (ec *Client) BscHeaderByNumber(endpoint string, number *big.Int) (*BscHeade
 		return nil, err
 	}
 
+	fmt.Println("")
 	data := make([]byte, 0, len(respmsg.Result))
 	for _, res := range respmsg.Result {
 		data = append(data, res)
