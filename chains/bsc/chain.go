@@ -86,7 +86,7 @@ func syncHeaderToMap(m *chain.Maintainer, latestBlock *big.Int) error {
 	//}{}
 	var extra VoteAttestation
 	m.Log.Info("Find sync block", "current height", headerHeight, "extra", extra, "hex", common.Bytes2Hex(header.Extra), "len", len(header.Extra))
-	err = rlp.Decode(bytes.NewBuffer(header.Extra[33:len(header.Extra)-65]), &extra)
+	err = rlp.Decode(bytes.NewBuffer(header.Extra[32:len(header.Extra)-65]), &extra)
 	if err != nil {
 		return err
 	}
