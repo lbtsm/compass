@@ -30,7 +30,12 @@ import (
 	"github.com/pkg/errors"
 )
 
-type Handler func(*sync) (int64, error)
+type handlerResult struct {
+	cursor       int64
+	messageCount int
+}
+
+type Handler func(*sync) (handlerResult, error)
 
 var errSolanaTransactionFailed = errors.New("solana transaction failed")
 
@@ -58,7 +63,7 @@ func (m *sync) Sync() error {
 		return errors.New("polling terminated")
 	default:
 		for {
-			id, err := m.handler(m)
+			result, err := m.syncOnce()
 			if err != nil {
 				if errors.Is(err, chain.NotVerifyAble) {
 					time.Sleep(constant.BlockRetryInterval)
@@ -69,21 +74,30 @@ func (m *sync) Sync() error {
 				time.Sleep(constant.BlockRetryInterval)
 				continue
 			}
-			if id == 0 {
+			if result.cursor == 0 {
 				time.Sleep(constant.MessengerInterval)
 				continue
-			}
-
-			m.Cfg.StartBlock = big.NewInt(id)
-			_ = m.WaitUntilMsgHandled(1)
-			err = m.BlockStore.StoreBlock(m.Cfg.StartBlock)
-			if err != nil {
-				m.Log.Error("Failed to write latest block to blockstore", "err", err)
 			}
 
 			time.Sleep(constant.MessengerInterval)
 		}
 	}
+}
+
+func (m *sync) syncOnce() (handlerResult, error) {
+	result, err := m.handler(m)
+	if err != nil || result.cursor == 0 {
+		return result, err
+	}
+
+	m.Cfg.StartBlock = big.NewInt(result.cursor)
+	if result.messageCount > 0 {
+		_ = m.WaitUntilMsgHandled(result.messageCount)
+	}
+	if err = m.BlockStore.StoreBlock(m.Cfg.StartBlock); err != nil {
+		m.Log.Error("Failed to write latest block to blockstore", "err", err)
+	}
+	return result, nil
 }
 
 type Log struct {
@@ -180,24 +194,24 @@ func match(addr string, target []string) int {
 	return -1
 }
 
-func mosHandler(m *sync) (int64, error) {
+func mosHandler(m *sync) (handlerResult, error) {
 	// 通过 filter 过滤
 	log, err := filter(m)
 	if err != nil {
-		return 0, errors.Wrap(err, "filter failed")
+		return handlerResult{}, errors.Wrap(err, "filter failed")
 	}
 	if log == nil || log.Id == 0 {
-		return 0, nil
+		return handlerResult{}, nil
 	}
 	receiptHash, receiptPack, err := m.genReceipt(log)
 	if err != nil {
-		return 0, errors.Wrap(err, "gen receipt failed")
+		return handlerResult{}, errors.Wrap(err, "gen receipt failed")
 	}
 	m.Log.Info("Sol2Evm msger generate", "receiptHash", receiptHash)
 	bn := proof.GenLogBlockNumber(big.NewInt(log.BlockNumber), 1, uint(log.Id-4249250))
 	proposalInfo, err := chain.GetSigner(bn, *receiptHash, uint64(m.cfg.Id), uint64(m.cfg.MapChainID))
 	if err != nil {
-		return 0, err
+		return handlerResult{}, err
 	}
 	var fixedHash [32]byte
 	for i, v := range receiptHash {
@@ -213,20 +227,20 @@ func mosHandler(m *sync) (int64, error) {
 
 	input, err := mapprotocol.GetAbi.Methods[mapprotocol.MethodOfGetBytes].Inputs.Pack(pd)
 	if err != nil {
-		return 0, errors.Wrap(err, "pack getBytes failed")
+		return handlerResult{}, errors.Wrap(err, "pack getBytes failed")
 	}
 
 	tmpData := CrossOutData{}
 	err = json.Unmarshal([]byte(log.Data), &tmpData)
 	if err != nil {
-		return 0, errors.Wrap(err, "unmarshal resp.Data failed")
+		return handlerResult{}, errors.Wrap(err, "unmarshal resp.Data failed")
 	}
 	orderId := common.HexToHash(tmpData.OrderId)
 	finalInput, err := mapprotocol.PackInput(mapprotocol.Mcs, mapprotocol.MethodOfMessageIn,
 		big.NewInt(0).SetUint64(uint64(m.Cfg.Id)),
 		big.NewInt(int64(0)), orderId, input)
 	if err != nil {
-		return 0, nil
+		return handlerResult{}, nil
 	}
 
 	message := msg.NewSwapWithProof(m.Cfg.Id, m.Cfg.MapChainID, []interface{}{finalInput,
@@ -234,41 +248,41 @@ func mosHandler(m *sync) (int64, error) {
 	err = m.Router.Send(message)
 	if err != nil {
 		m.Log.Error("subscription error: failed to route message", "err", err)
-		return 0, nil
+		return handlerResult{}, nil
 	}
 
-	return log.Id, nil
+	return handlerResult{cursor: log.Id, messageCount: 1}, nil
 }
 
-func oracleHandler(m *sync) (int64, error) {
+func oracleHandler(m *sync) (handlerResult, error) {
 	// 通过 filter 过滤
 	log, err := filter(m)
 	if err != nil {
-		return 0, errors.Wrap(err, "filter failed")
+		return handlerResult{}, errors.Wrap(err, "filter failed")
 	}
 	if log == nil || log.Id == 0 {
-		return 0, nil
+		return handlerResult{}, nil
 	}
 
 	err = m.checkLog(log)
 	if err != nil {
 		if errors.Is(err, errSolanaTransactionFailed) {
 			m.Log.Warn("Skip failed Solana transaction", "txHash", log.TxHash, "err", err)
-			return log.Id, nil
+			return handlerResult{cursor: log.Id}, nil
 		}
-		return 0, err
+		return handlerResult{}, err
 	}
 
 	receiptHash, _, err := m.genReceipt(log)
 	if err != nil {
-		return 0, errors.Wrap(err, "gen receipt failed")
+		return handlerResult{}, errors.Wrap(err, "gen receipt failed")
 	}
 	m.Log.Info("Sol2Evm oracle generate", "receiptHash", receiptHash)
 	bn := proof.GenLogBlockNumber(big.NewInt(log.BlockNumber), 1, uint(log.Id-4249250))
 
 	ret, err := chain.MulSignInfo(0, uint64(m.Cfg.MapChainID))
 	if err != nil {
-		return 0, errors.Wrap(err, "mul sign failed")
+		return handlerResult{}, errors.Wrap(err, "mul sign failed")
 	}
 
 	version := make([]byte, 0)
@@ -279,17 +293,17 @@ func oracleHandler(m *sync) (int64, error) {
 	input, err := mapprotocol.PackAbi.Methods[mapprotocol.MethodOfSolidityPack].Inputs.Pack(receiptHash,
 		ret.Version, bn, big.NewInt(int64(m.Cfg.Id)))
 	if err != nil {
-		return 0, errors.Wrap(err, "oracle pack input failed")
+		return handlerResult{}, errors.Wrap(err, "oracle pack input failed")
 	}
 
 	message := msg.NewProposal(m.Cfg.Id, m.Cfg.MapChainID, []interface{}{input, receiptHash, bn}, m.MsgCh)
 	err = m.Router.Send(message)
 	if err != nil {
 		m.Log.Error("subscription error: failed to route message", "err", err)
-		return 0, nil
+		return handlerResult{}, nil
 	}
 
-	return log.Id, nil
+	return handlerResult{cursor: log.Id, messageCount: 1}, nil
 }
 
 func (m *sync) genReceipt(log *Log) (*common.Hash, []byte, error) {

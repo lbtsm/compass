@@ -26,6 +26,7 @@ type RawChainConfig struct {
 	Id         string `json:"id"`       // ChainID
 	Endpoint   string `json:"endpoint"` // url for rpc endpoint
 	Mcs        string `json:"mcs,omitempty"`
+	Event      string `json:"event,omitempty"`
 	OracleNode string `json:"oracleNode,omitempty"`
 	LightNode  string `json:"lightNode,omitempty"`
 }
