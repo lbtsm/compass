@@ -307,31 +307,39 @@ func attempt(httpc *http.Client, sender *senderRegistry, tx pendingTx, butterAPI
 		"routeWithTxParamsLen", routeWithTxParamsLen(data),
 		"execRouteTxParamLen", execRouteTxParamLen(data))
 
-	chosen, err := pickTx(data)
+	useNormalRoute := isTokenProjectTransaction(tx)
+	chosen, err := pickTxParamsForTransaction(tx, data)
 	if err != nil {
 		recordAttempt(tx.ID, tx.OrderID, fmt.Errorf("pick tx: %w", err), logger)
 		return
 	}
-	logger.Info("rescue tx picked",
-		"chainId", chosen.ChainID, "to", chosen.To, "method", chosen.Method)
-
-	hash, err := sender.send(*chosen, logger)
+	step := 0
+	hashes, err := sendTxParams(chosen, func(param txParam) (string, error) {
+		step++
+		logger.Info("rescue tx picked",
+			"step", step, "total", len(chosen), "normalRoute", useNormalRoute,
+			"chainId", param.ChainID, "to", param.To, "method", param.Method)
+		hash, sendErr := sender.send(param, logger)
+		if sendErr == nil {
+			logger.Info("rescue tx step sent", "step", step, "total", len(chosen), "hash", hash)
+		}
+		return hash, sendErr
+	})
 	if err != nil {
 		// Estimate / pre-exec matched constant.IgnoreError → bridge already
 		// settled this order, no rescue needed. Mark done so we don't retry.
 		if errors.Is(err, errIgnorable) {
 			markDone(tx.ID)
 			logger.Info("rescue skipped (ignorable)",
-				"chainId", chosen.ChainID, "to", chosen.To, "reason", err)
+				"step", step, "reason", err)
 			return
 		}
-		recordAttempt(tx.ID, tx.OrderID, fmt.Errorf("send tx: %w", err), logger)
+		recordAttempt(tx.ID, tx.OrderID, err, logger)
 		return
 	}
 	markDone(tx.ID)
-	logger.Info("rescue tx sent",
-		"chainId", chosen.ChainID, "to", chosen.To,
-		"hash", hash, "desc", data.ExecDesc)
+	logger.Info("rescue tx sequence sent",
+		"count", len(chosen), "hashes", strings.Join(hashes, ","), "desc", data.ExecDesc)
 }
 
 func routeWithTxParamsLen(d *execData) int {
@@ -493,6 +501,49 @@ func pickTx(d *execData) (*txParam, error) {
 		return nil, fmt.Errorf("userRouter=true but no execRoute.rescueFundsTxParam")
 	}
 	return d.ExecRoute.RescueFundsTxParam, nil
+}
+
+func isTokenProjectTransaction(tx pendingTx) bool {
+	if len(tx.Affiliates) == 0 {
+		return false
+	}
+	name := tx.Affiliates[0].Name
+	return strings.EqualFold(name, "tokenProject") || strings.EqualFold(name, "tp")
+}
+
+func pickTxParams(d *execData, useNormalRoute bool) ([]txParam, error) {
+	if useNormalRoute {
+		if d == nil || d.ExecRoute == nil || len(d.ExecRoute.RouteWithTxParams) == 0 {
+			return nil, fmt.Errorf("token project transaction has no execRoute.routeWithTxParams")
+		}
+		params := d.ExecRoute.RouteWithTxParams[0].TxParam
+		if len(params) == 0 {
+			return nil, fmt.Errorf("token project transaction has empty execRoute.routeWithTxParams[0].txParam")
+		}
+		return params, nil
+	}
+
+	param, err := pickTx(d)
+	if err != nil {
+		return nil, err
+	}
+	return []txParam{*param}, nil
+}
+
+func pickTxParamsForTransaction(tx pendingTx, d *execData) ([]txParam, error) {
+	return pickTxParams(d, isTokenProjectTransaction(tx))
+}
+
+func sendTxParams(params []txParam, send func(txParam) (string, error)) ([]string, error) {
+	hashes := make([]string, 0, len(params))
+	for i, param := range params {
+		hash, err := send(param)
+		if err != nil {
+			return hashes, fmt.Errorf("send tx %d/%d: %w", i+1, len(params), err)
+		}
+		hashes = append(hashes, hash)
+	}
+	return hashes, nil
 }
 
 // buildProofParams mirrors fex-web's DetailModal handleExecParams (L755-810).
