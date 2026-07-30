@@ -8,12 +8,12 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/ChainSafe/log15"
 	"github.com/gagliardetto/solana-go/rpc"
 	"github.com/mapprotocol/compass/internal/chain"
 	"github.com/mapprotocol/compass/internal/stream"
-	"github.com/mapprotocol/compass/pkg/blockstore"
 )
 
 const (
@@ -85,7 +85,16 @@ func (c *staticSolFilterClient) ListMosLogs(chain.FilterListRequest) (*stream.Mo
 	return c.response, nil
 }
 
-func TestOracleHandlerSkipsFailedTransaction(t *testing.T) {
+type recordingBlockStore struct {
+	block *big.Int
+}
+
+func (s *recordingBlockStore) StoreBlock(block *big.Int) error {
+	s.block = new(big.Int).Set(block)
+	return nil
+}
+
+func TestSyncOnceSkipsFailedTransactionWithoutWaitingForMessage(t *testing.T) {
 	server := newFailedTransactionRPCServer(t, map[string]interface{}{
 		"InstructionError": []interface{}{10, "ComputationalBudgetExceeded"},
 	})
@@ -101,24 +110,97 @@ func TestOracleHandlerSkipsFailedTransaction(t *testing.T) {
 		},
 		McsContract: []string{program},
 	}
+	store := &recordingBlockStore{}
 	commonSync := chain.NewCommonSync(
 		nil,
 		&cfg.Config,
 		log15.New(),
 		make(chan int),
 		make(chan error, 1),
-		&blockstore.EmptyStore{},
+		store,
 		chain.OptOfFilterClient(&staticSolFilterClient{response: &stream.MosListResp{
 			List: []*stream.GetMosResp{{Id: logID, TxHash: failedSolanaBudgetTxHash, ContractAddress: program}},
 		}}),
 	)
 	m := newSync(commonSync, oracleHandler, nil, cfg, rpc.New(server.URL))
 
-	id, err := oracleHandler(m)
-	if err != nil {
-		t.Fatalf("oracleHandler returned error: %v", err)
+	type outcome struct {
+		result handlerResult
+		err    error
 	}
-	if id != logID {
-		t.Fatalf("oracleHandler returned ID %d, want %d", id, logID)
+	done := make(chan outcome, 1)
+	go func() {
+		result, err := m.syncOnce()
+		done <- outcome{result: result, err: err}
+	}()
+
+	select {
+	case got := <-done:
+		if got.err != nil {
+			t.Fatalf("syncOnce returned error: %v", got.err)
+		}
+		if got.result.cursor != logID {
+			t.Fatalf("syncOnce returned cursor %d, want %d", got.result.cursor, logID)
+		}
+		if got.result.messageCount != 0 {
+			t.Fatalf("syncOnce returned message count %d, want 0", got.result.messageCount)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("syncOnce blocked waiting for a message that was never routed")
+	}
+
+	if m.Cfg.StartBlock.Int64() != logID {
+		t.Fatalf("sync cursor is %d, want %d", m.Cfg.StartBlock.Int64(), logID)
+	}
+	if store.block == nil || store.block.Int64() != logID {
+		t.Fatalf("stored cursor is %v, want %d", store.block, logID)
+	}
+}
+
+func TestSyncOnceWaitsForRoutedMessageBeforeStoringCursor(t *testing.T) {
+	const logID int64 = 425
+	cfg := &Config{Config: chain.Config{StartBlock: big.NewInt(0)}}
+	store := &recordingBlockStore{}
+	handlerCalled := make(chan struct{})
+	commonSync := chain.NewCommonSync(
+		nil,
+		&cfg.Config,
+		log15.New(),
+		make(chan int),
+		make(chan error, 1),
+		store,
+	)
+	m := newSync(commonSync, func(*sync) (handlerResult, error) {
+		close(handlerCalled)
+		return handlerResult{cursor: logID, messageCount: 1}, nil
+	}, nil, cfg, nil)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := m.syncOnce()
+		done <- err
+	}()
+	<-handlerCalled
+
+	select {
+	case err := <-done:
+		t.Fatalf("syncOnce returned before routed message was handled: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	if store.block != nil {
+		t.Fatalf("stored cursor %s before routed message was handled", store.block)
+	}
+
+	m.MsgCh <- struct{}{}
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("syncOnce returned error: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("syncOnce remained blocked after routed message was handled")
+	}
+	if store.block == nil || store.block.Int64() != logID {
+		t.Fatalf("stored cursor is %v, want %d", store.block, logID)
 	}
 }

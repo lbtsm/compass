@@ -3,6 +3,8 @@ package service
 import (
 	"context"
 	"crypto/ecdsa"
+	"encoding/binary"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -135,13 +137,24 @@ func (s *ProofSrv) SuccessProof(srcChain, desChain string, srcBlockNumber int64,
 		src, des                                                                     chains.Proffer
 		srcClient                                                                    *ethclient.Client
 		srcEndpoint, srcOracleNode, srcMcs, srcLightNode, desTo, desLight, desOracle string
-		srcChainId, _                                                                = strconv.ParseUint(srcChain, 10, 64)
-		desChainId, _                                                                = strconv.ParseUint(desChain, 10, 64)
+		srcConfig                                                                    expose.RawChainConfig
 	)
+	srcChainId, err := strconv.ParseUint(srcChain, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid source chain ID %q: %w", srcChain, err)
+	}
+	desChainId, err := strconv.ParseUint(desChain, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("invalid destination chain ID %q: %w", desChain, err)
+	}
 	for _, ele := range s.cfg.Chains {
 		if ele.Id == srcChain {
-			creator, _ := chains.CreateProffer(ele.Type)
+			creator, ok := chains.CreateProffer(ele.Type)
+			if !ok {
+				return nil, fmt.Errorf("source chain %s has unsupported proof type %q", srcChain, ele.Type)
+			}
 			src = creator
+			srcConfig = ele
 			srcEndpoint = ele.Endpoint
 			srcOracleNode = ele.OracleNode
 			srcMcs = ele.Mcs
@@ -152,7 +165,10 @@ func (s *ProofSrv) SuccessProof(srcChain, desChain string, srcBlockNumber int64,
 			}
 		}
 		if ele.Id == desChain {
-			creator, _ := chains.CreateProffer(ele.Type)
+			creator, ok := chains.CreateProffer(ele.Type)
+			if !ok {
+				return nil, fmt.Errorf("destination chain %s has unsupported proof type %q", desChain, ele.Type)
+			}
 			des = creator
 			desTo = ele.Mcs
 			desOracle = ele.OracleNode
@@ -175,12 +191,11 @@ func (s *ProofSrv) SuccessProof(srcChain, desChain string, srcBlockNumber int64,
 	}
 
 	// get log
-	logs, err := srcClient.FilterLogs(context.Background(), ethereum.FilterQuery{
-		FromBlock: big.NewInt(srcBlockNumber),
-		ToBlock:   big.NewInt(srcBlockNumber),
-		Addresses: nil,
-		Topics:    nil,
-	})
+	query, err := buildProofLogQuery(srcConfig, srcBlockNumber)
+	if err != nil {
+		return nil, err
+	}
+	logs, err := srcClient.FilterLogs(context.Background(), query)
 	if err != nil {
 		return nil, err
 	}
@@ -188,8 +203,11 @@ func (s *ProofSrv) SuccessProof(srcChain, desChain string, srcBlockNumber int64,
 	if err != nil {
 		return nil, err
 	}
+	orderId, err := validateProofLog(targetLog, srcConfig, srcChainId, desChainId, srcBlockNumber, logIndex)
+	if err != nil {
+		return nil, err
+	}
 	if proofType == 0 {
-		orderId := targetLog.Topics[1]
 		proofType, err = chain.PreSendTx(0, srcChainId, desChainId, big.NewInt(srcBlockNumber), orderId.Bytes())
 		if errors.Is(err, chain.NotVerifyAble) { // maintainer
 			updateHeader, err := src.Maintainer(srcClient, srcChainId, desChainId, srcEndpoint)
@@ -253,4 +271,117 @@ func findLogByIndex(logs []types.Log, blockNumber int64, logIndex uint) (types.L
 		}
 	}
 	return types.Log{}, fmt.Errorf("log not found, block(%d), logIndex(%d)", blockNumber, logIndex)
+}
+
+func buildProofLogQuery(cfg expose.RawChainConfig, blockNumber int64) (ethereum.FilterQuery, error) {
+	if blockNumber < 0 {
+		return ethereum.FilterQuery{}, fmt.Errorf("invalid proof block number %d", blockNumber)
+	}
+	if !common.IsHexAddress(cfg.Mcs) {
+		return ethereum.FilterQuery{}, fmt.Errorf("invalid MCS address %q for chain %s", cfg.Mcs, cfg.Id)
+	}
+	mcs := common.HexToAddress(cfg.Mcs)
+	if mcs == (common.Address{}) {
+		return ethereum.FilterQuery{}, fmt.Errorf("MCS address is zero for chain %s", cfg.Id)
+	}
+	topics, err := proofEventTopics(cfg.Event)
+	if err != nil {
+		return ethereum.FilterQuery{}, fmt.Errorf("invalid event whitelist for chain %s: %w", cfg.Id, err)
+	}
+	block := big.NewInt(blockNumber)
+	return ethereum.FilterQuery{
+		FromBlock: block,
+		ToBlock:   new(big.Int).Set(block),
+		Addresses: []common.Address{mcs},
+		Topics:    [][]common.Hash{topics},
+	}, nil
+}
+
+func proofEventTopics(configured string) ([]common.Hash, error) {
+	if strings.TrimSpace(configured) == "" {
+		return nil, errors.New("event whitelist is empty")
+	}
+
+	values := strings.Split(configured, "|")
+	topics := make([]common.Hash, 0, len(values))
+	seen := make(map[common.Hash]struct{}, len(values))
+	for _, value := range values {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			return nil, errors.New("event whitelist contains an empty entry")
+		}
+
+		var topic common.Hash
+		rawHash := strings.TrimPrefix(value, "0x")
+		if len(rawHash) == common.HashLength*2 {
+			decoded, err := hex.DecodeString(rawHash)
+			if err != nil {
+				return nil, fmt.Errorf("invalid event topic %q: %w", value, err)
+			}
+			topic = common.BytesToHash(decoded)
+		} else {
+			if !strings.Contains(value, "(") || !strings.HasSuffix(value, ")") {
+				return nil, fmt.Errorf("invalid event signature %q", value)
+			}
+			topic = constant.EventSig(value).GetTopic()
+		}
+		if topic == (common.Hash{}) {
+			return nil, errors.New("event whitelist contains a zero topic")
+		}
+
+		if _, ok := seen[topic]; ok {
+			continue
+		}
+		seen[topic] = struct{}{}
+		topics = append(topics, topic)
+	}
+	return topics, nil
+}
+
+func validateProofLog(log types.Log, cfg expose.RawChainConfig, srcChainID, desChainID uint64,
+	blockNumber int64, logIndex uint) (common.Hash, error) {
+	query, err := buildProofLogQuery(cfg, blockNumber)
+	if err != nil {
+		return common.Hash{}, err
+	}
+	if log.BlockNumber != uint64(blockNumber) {
+		return common.Hash{}, fmt.Errorf("proof log block %d does not match requested block %d", log.BlockNumber, blockNumber)
+	}
+	if log.Index != logIndex {
+		return common.Hash{}, fmt.Errorf("proof log index %d does not match requested index %d", log.Index, logIndex)
+	}
+	if log.Address != query.Addresses[0] {
+		return common.Hash{}, fmt.Errorf("proof log address %s does not match configured MCS %s", log.Address, query.Addresses[0])
+	}
+	if len(log.Topics) < 2 {
+		return common.Hash{}, fmt.Errorf("proof log topics length %d is insufficient", len(log.Topics))
+	}
+
+	allowedEvent := false
+	for _, topic := range query.Topics[0] {
+		if log.Topics[0] == topic {
+			allowedEvent = true
+			break
+		}
+	}
+	if !allowedEvent {
+		return common.Hash{}, fmt.Errorf("proof log event %s is not allowed", log.Topics[0])
+	}
+
+	orderID := log.Topics[1]
+	if orderID == (common.Hash{}) {
+		return common.Hash{}, errors.New("proof log order ID is zero")
+	}
+	if srcChainID == constant.MapChainId {
+		if len(log.Topics) < 3 {
+			return common.Hash{}, fmt.Errorf("proof log target chain topic is missing")
+		}
+		loggedDestination := binary.BigEndian.Uint64(log.Topics[2][8:16])
+		if loggedDestination != desChainID {
+			return common.Hash{}, fmt.Errorf("proof log target chain %d does not match requested destination %d", loggedDestination, desChainID)
+		}
+	} else if desChainID != constant.MapChainId {
+		return common.Hash{}, fmt.Errorf("non-MAP source chain %d must route through MAP chain %d", srcChainID, constant.MapChainId)
+	}
+	return orderID, nil
 }
