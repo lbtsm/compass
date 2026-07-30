@@ -184,13 +184,9 @@ func (s *ProofSrv) SuccessProof(srcChain, desChain string, srcBlockNumber int64,
 	if err != nil {
 		return nil, err
 	}
-	targetLog := types.Log{}
-	for _, ele := range logs {
-		if ele.Index != logIndex {
-			continue
-		}
-		tmp := ele
-		targetLog = tmp
+	targetLog, err := findLogByIndex(logs, srcBlockNumber, logIndex)
+	if err != nil {
+		return nil, err
 	}
 	if proofType == 0 {
 		orderId := targetLog.Topics[1]
@@ -248,4 +244,13 @@ func (s *ProofSrv) SuccessProof(srcChain, desChain string, srcBlockNumber int64,
 		"exec_desc":  "Execute mos transaction",
 		"exec_route": struct{}{},
 	}, nil
+}
+
+func findLogByIndex(logs []types.Log, blockNumber int64, logIndex uint) (types.Log, error) {
+	for i := range logs {
+		if logs[i].Index == logIndex {
+			return logs[i], nil
+		}
+	}
+	return types.Log{}, fmt.Errorf("log not found, block(%d), logIndex(%d)", blockNumber, logIndex)
 }
