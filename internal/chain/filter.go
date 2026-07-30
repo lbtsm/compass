@@ -69,16 +69,30 @@ func (m *Oracle) filterOracle() error {
 			m.Cfg.StartBlock = big.NewInt(int64(tmp[0]))
 		}
 	}()
-	for _, pid := range []int64{constant.ProjectOfOracle, constant.ProjectOfMsger} {
-		var back *stream.MosListResp
-		back, err = m.ListMosLogs(pid, topic, 1)
-		if err != nil {
+	projectIDs := []int64{constant.ProjectOfOracle, constant.ProjectOfMsger}
+	batches := make([]*stream.MosListResp, 0, len(projectIDs))
+	for _, pid := range projectIDs {
+		back, fetchErr := m.ListMosLogs(pid, topic, 1)
+		if fetchErr != nil {
+			err = fetchErr
 			return err
 		}
-		if len(back.List) == 0 {
-			continue
-		}
+		batches = append(batches, back)
+	}
 
+	latestBlock, latestErr := m.Conn.LatestBlock()
+	if latestErr != nil {
+		err = latestErr
+		return err
+	}
+	finalized, pending := m.filterBatchesFinalized(batches, latestBlock)
+	if !finalized {
+		m.Log.Debug("Filter oracle log not finalized", "id", pending.Id, "block", pending.BlockNumber,
+			"latest", latestBlock, "confirmations", m.BlockConfirmations)
+		return nil
+	}
+
+	for _, back := range batches {
 		for _, ele := range back.List {
 			idx := m.Match(ele.ContractAddress) // 新版 oracle
 			if idx == -1 {
@@ -96,6 +110,21 @@ func (m *Oracle) filterOracle() error {
 		}
 	}
 	return nil
+}
+
+func (m *Oracle) filterBatchesFinalized(batches []*stream.MosListResp, latestBlock *big.Int) (bool, *stream.GetMosResp) {
+	for _, batch := range batches {
+		for _, ele := range batch.List {
+			if m.Match(ele.ContractAddress) == -1 {
+				continue
+			}
+			eventBlock := new(big.Int).SetUint64(ele.BlockNumber)
+			if latestBlock.Cmp(eventBlock) < 0 || new(big.Int).Sub(latestBlock, eventBlock).Cmp(m.BlockConfirmations) < 0 {
+				return false, ele
+			}
+		}
+	}
+	return true, nil
 }
 
 func Request(urlPath string) (interface{}, error) {

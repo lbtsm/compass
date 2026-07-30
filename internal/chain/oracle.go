@@ -213,11 +213,11 @@ func log2Oracle(m *Oracle, logs []types.Log, blockNumber *big.Int, filterId int6
 		if err != nil {
 			return errors.Wrap(err, "Unable to get receipt")
 		}
-		if l, match := MatchLog(rpcReceipt.Logs, &tmp); match {
-			tmp = *l // use online log
-		} else {
-			m.Log.Info("Oracle receipt log not match", "blockNumber", blockNumber, "logIndex", log.Index)
+		matchedLog, err := requireMatchingReceiptLog(rpcReceipt.Logs, &tmp)
+		if err != nil {
+			return err
 		}
+		tmp = *matchedLog
 
 		blockHash := ""
 		willBlock, err := m.Conn.Client().MAPBlockByNumber(context.Background(), big.NewInt(targetBn.Int64()+3))
@@ -442,4 +442,12 @@ func MatchLog(source []*types.Log, targetLog *types.Log) (*types.Log, bool) {
 		}
 	}
 	return nil, false
+}
+
+func requireMatchingReceiptLog(source []*types.Log, target *types.Log) (*types.Log, error) {
+	if matched, ok := MatchLog(source, target); ok {
+		return matched, nil
+	}
+	return nil, fmt.Errorf("receipt log not match, txHash(%s), blockNumber(%d), logIndex(%d)",
+		target.TxHash.Hex(), target.BlockNumber, target.Index)
 }

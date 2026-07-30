@@ -32,6 +32,8 @@ import (
 
 type Handler func(*sync) (int64, error)
 
+var errSolanaTransactionFailed = errors.New("solana transaction failed")
+
 type sync struct {
 	*chain.CommonSync
 	handler   Handler
@@ -250,6 +252,10 @@ func oracleHandler(m *sync) (int64, error) {
 
 	err = m.checkLog(log)
 	if err != nil {
+		if errors.Is(err, errSolanaTransactionFailed) {
+			m.Log.Warn("Skip failed Solana transaction", "txHash", log.TxHash, "err", err)
+			return log.Id, nil
+		}
 		return 0, err
 	}
 
@@ -413,6 +419,9 @@ func (m *sync) checkLog(target *Log) error {
 	}
 	if txResult.Meta == nil {
 		return fmt.Errorf("missing transaction meta, hash(%s)", target.TxHash)
+	}
+	if txResult.Meta.Err != nil {
+		return fmt.Errorf("%w, hash(%s), err(%v)", errSolanaTransactionFailed, target.TxHash, txResult.Meta.Err)
 	}
 	tx, err := txResult.Transaction.GetTransaction()
 	if err != nil {
