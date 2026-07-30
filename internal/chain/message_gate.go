@@ -53,11 +53,11 @@ func (g *MessageGate) Prepare(log *types.Log, opts MessageGateOptions) (*Prepare
 	if err != nil {
 		return nil, err
 	}
-	if l, match := MatchLog(rpcReceipt.Logs, log); match {
-		log = l // use online log
-	} else {
-		g.Sync.Log.Info(opts.LogPrefix+" receipt log not match", "blockNumber", log.BlockNumber, "logIndex", log.Index)
+	matchedLog, err := requireMatchingReceiptLog(rpcReceipt.Logs, log)
+	if err != nil {
+		return nil, err
 	}
+	log = matchedLog
 	if err := g.specialTokenGate(log, opts, rpcReceipt.Logs...); err != nil {
 		return nil, err
 	}
