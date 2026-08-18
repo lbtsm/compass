@@ -51,3 +51,17 @@ func TestEthClientFromChainRejectsUnsupportedChain(t *testing.T) {
 		t.Fatalf("ethClientFromChain error lacks context: %v", err)
 	}
 }
+
+func TestEthClientFromChainRejectsNilProviderClient(t *testing.T) {
+	chain := &mainTestEthClientChain{
+		mainTestChain: &mainTestChain{name: "map"},
+	}
+
+	_, err := ethClientFromChain(chain)
+	if err == nil {
+		t.Fatal("ethClientFromChain returned nil error for a nil provider client")
+	}
+	if !strings.Contains(err.Error(), "map") || !strings.Contains(err.Error(), "returned a nil eth client") {
+		t.Fatalf("ethClientFromChain error lacks context: %v", err)
+	}
+}

@@ -290,7 +290,11 @@ func ethClientFromChain(chain core.Chain) (*ethclient.Client, error) {
 	if !ok {
 		return nil, fmt.Errorf("chain %q does not provide an eth client", chain.Name())
 	}
-	return provider.EthClient(), nil
+	client := provider.EthClient()
+	if client == nil {
+		return nil, fmt.Errorf("chain %q returned a nil eth client", chain.Name())
+	}
+	return client, nil
 }
 
 func filterAPIKeyFromConfig(ctx *cli.Context, cfg *config.Config) string {
