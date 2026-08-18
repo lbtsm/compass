@@ -164,7 +164,7 @@ func AssembleMapProof(cli *ethclient.Client, log *types.Log, receipts []*types.R
 	ek := util.Key2Hex(key, len(prf))
 
 	var payloads []byte
-	name, _ := mapprotocol.OnlineChaId[msg.ChainId(uToChainID)]
+	name := mapprotocol.Default().ChainNameOf(msg.ChainId(uToChainID))
 	switch name {
 	default:
 		istanbulExtra := mapprotocol.ConvertIstanbulExtra(ist)

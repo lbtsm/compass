@@ -47,7 +47,7 @@ func (m *Maintainer) sync() error {
 	m.Log.Info("Polling Blocks...", "block", currentBlock)
 
 	if m.Cfg.SyncToMap {
-		syncedHeight, err := mapprotocol.Get2MapHeight(m.Cfg.Id)
+		syncedHeight, err := mapprotocol.Default().Chain2MapHeight(m.Cfg.Id)
 		if err != nil {
 			m.Log.Error("Get synced Height failed", "err", err)
 			return err
@@ -63,7 +63,7 @@ func (m *Maintainer) sync() error {
 		}
 	} else if m.Cfg.Id == m.Cfg.MapChainID {
 		minHeight := big.NewInt(0)
-		for cId, height := range mapprotocol.SyncOtherMap {
+		for cId, height := range mapprotocol.Default().Map2OtherInitHeights() {
 			if minHeight.Uint64() == 0 || minHeight.Cmp(height) == 1 {
 				m.Log.Info("map to other chain find min sync height ", "chainId", cId,
 					"syncedHeight", minHeight, "currentHeight", height)

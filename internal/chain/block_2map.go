@@ -45,7 +45,7 @@ func (w *Writer) execToMapMsg(m msg.Message) bool {
 				errorCount++
 				if errorCount >= 10 {
 					util.Alarm(context.Background(), fmt.Sprintf("%s2map updateHeader failed, err is %s",
-						mapprotocol.OnlineChaId[m.Source], err.Error()))
+						mapprotocol.Default().ChainNameOf(m.Source), err.Error()))
 					errorCount = 0
 				}
 				continue

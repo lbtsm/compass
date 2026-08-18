@@ -175,7 +175,7 @@ func log2Msg(m *Messenger, log *types.Log, idx int) (int, error) {
 	if m.Cfg.Id == m.Cfg.MapChainID {
 		toChainID = big.NewInt(0).SetBytes(log.Topics[2].Bytes()[8:16]).Uint64()
 	}
-	chainName, ok := mapprotocol.OnlineChaId[msg.ChainId(toChainID)]
+	chainName, ok := mapprotocol.Default().ChainName(msg.ChainId(toChainID))
 	if !ok {
 		m.Log.Info("Map Found a log that is not the current task ", "blockNumber", log.BlockNumber, "toChainID", toChainID)
 		return 0, nil

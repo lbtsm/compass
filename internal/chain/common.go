@@ -26,7 +26,7 @@ type OrderStatusResp struct {
 }
 
 func OrderStatus(idx int, selfChainId, toChainID uint64, blockNumber *big.Int, orderId []byte) (*OrderStatusResp, error) {
-	call, ok := mapprotocol.ContractMapping[msg.ChainId(toChainID)]
+	call, ok := mapprotocol.Default().MosCall(msg.ChainId(toChainID))
 	if !ok {
 		return nil, ContractNotExist
 	}
@@ -65,7 +65,7 @@ type MulSignInfoResp struct {
 }
 
 func MulSignInfo(idx int, toChainID uint64) (*MulSignInfoResp, error) {
-	call, ok := mapprotocol.SingMapping[msg.ChainId(toChainID)]
+	call, ok := mapprotocol.Default().SignerCall(msg.ChainId(toChainID))
 	if !ok {
 		return nil, ContractNotExist
 	}
@@ -85,7 +85,7 @@ type ProposalInfoResp struct {
 }
 
 func ProposalInfo(idx int, selfChainId, toChainID uint64, blockNumber *big.Int, receipt common.Hash, version [32]byte) (*ProposalInfoResp, error) {
-	call, ok := mapprotocol.SingMapping[msg.ChainId(toChainID)]
+	call, ok := mapprotocol.Default().SignerCall(msg.ChainId(toChainID))
 	if !ok {
 		return nil, ContractNotExist
 	}

@@ -81,7 +81,7 @@ func (m *Maintainer) sync() error {
 				continue
 			}
 
-			startNumber, endNumber, err := mapprotocol.GetEth22MapNumber(m.Cfg.Id)
+			startNumber, endNumber, err := mapprotocol.Default().Eth2MapNumber(m.Cfg.Id)
 			if err != nil {
 				m.Log.Error("Get startNumber failed", "err", err)
 				time.Sleep(constant.BlockRetryInterval)
@@ -153,7 +153,7 @@ func (m *Maintainer) sync() error {
 }
 
 func (m *Maintainer) updateSyncHeight() error {
-	syncedHeight, err := mapprotocol.Get2MapHeight(m.Cfg.Id)
+	syncedHeight, err := mapprotocol.Default().Chain2MapHeight(m.Cfg.Id)
 	if err != nil {
 		m.Log.Error("Get synced Height failed", "err", err)
 		return err

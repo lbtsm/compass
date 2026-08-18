@@ -3,8 +3,6 @@ package eth2
 import (
 	"fmt"
 	"math/big"
-	"strconv"
-	"sync"
 
 	"github.com/ChainSafe/log15"
 	"github.com/ethereum/go-ethereum/common"
@@ -13,7 +11,6 @@ import (
 	"github.com/mapprotocol/compass/connections/eth2"
 	"github.com/mapprotocol/compass/core"
 	"github.com/mapprotocol/compass/internal/chain"
-	"github.com/mapprotocol/compass/internal/constant"
 	ieth "github.com/mapprotocol/compass/internal/eth2"
 	"github.com/mapprotocol/compass/internal/mapprotocol"
 	"github.com/mapprotocol/compass/internal/tx"
@@ -33,10 +30,17 @@ type Chain struct {
 	writer *chain.Writer       // The writer of the chain
 	listen core.Listener       // The listener of this chain
 	stop   chan<- int
+
+	proofConn *chain.ProofConnector
 }
 
 func New() *Chain {
-	return &Chain{}
+	return &Chain{
+		proofConn: chain.NewProofConnector(mapprotocol.Default(), func(endpoint string) core.Connection {
+			return eth2.NewConnection(endpoint, "", true, nil, nil, big.NewInt(chain.DefaultGasLimit),
+				big.NewInt(chain.DefaultGasPrice), chain.DefaultGasMultiplier)
+		}, nil),
+	}
 }
 
 func (c *Chain) New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error, role mapprotocol.Role) (core.Chain, error) {
@@ -71,6 +75,7 @@ func (c *Chain) New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan
 
 	// simplified a little bit
 	var listen core.Listener
+	registry := mapprotocol.Default()
 	cs := chain.NewCommonSync(conn, cfg, logger, stop, sysErr, bs,
 		chain.OptOfOracleHandler(chain.DefaultOracleHandler))
 	cs.RegisterState(cfg.Name, string(role))
@@ -82,22 +87,22 @@ func (c *Chain) New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan
 			return nil, errors.Wrap(err, "eth2 get init headerHeight failed")
 		}
 		logger.Info("map2eth2 Current situation", "height", height, "lightNode", cfg.LightNode)
-		mapprotocol.SyncOtherMap[cfg.Id] = height
-		mapprotocol.Map2OtherHeight[cfg.Id] = fn
+		registry.SetMap2OtherInitHeight(cfg.Id, height)
+		registry.SetMap2OtherHeight(cfg.Id, fn)
 		listen = NewMaintainer(cs, conn.Eth2Client())
 	case mapprotocol.RoleOfMessenger:
 		oracleAbi, _ := abi.New(mapprotocol.OracleAbiJson)
 		call := contract.New(conn, cfg.McsContract, oracleAbi)
-		mapprotocol.ContractMapping[cfg.Id] = call
+		registry.SetMosCall(cfg.Id, call)
 		listen = NewMessenger(cs)
 	case mapprotocol.RoleOfOracle:
 		oAbi, _ := abi.New(mapprotocol.SignerJson)
 		oracleCall := contract.New(conn, []common.Address{cfg.OracleNode}, oAbi)
-		mapprotocol.SingMapping[cfg.Id] = oracleCall
+		registry.SetSignerCall(cfg.Id, oracleCall)
 
 		otherAbi, _ := abi.New(mapprotocol.OtherAbi)
 		call := contract.New(conn, []common.Address{cfg.LightNode}, otherAbi)
-		mapprotocol.LightNodeMapping[cfg.Id] = call
+		registry.SetLightNodeCall(cfg.Id, call)
 		listen = chain.NewOracle(cs)
 	}
 	wri := chain.NewWriter(conn, cfg, logger, stop, sysErr)
@@ -153,29 +158,7 @@ func (c *Chain) Conn() core.Connection {
 }
 
 func (c *Chain) Connect(id, endpoint, mcs, lightNode, oracleNode string) (*ethclient.Client, error) {
-	conn := eth2.NewConnection(endpoint, "", true, nil, nil, big.NewInt(chain.DefaultGasLimit),
-		big.NewInt(chain.DefaultGasPrice), chain.DefaultGasMultiplier)
-	err := conn.Connect()
-	if err != nil {
-		return nil, err
-	}
-
-	fn := sync.OnceFunc(func() {
-		idInt, _ := strconv.ParseUint(id, 10, 64)
-		oracleAbi, _ := abi.New(mapprotocol.OracleAbiJson)
-		call := contract.New(conn, []common.Address{common.HexToAddress(mcs)}, oracleAbi)
-		mapprotocol.ContractMapping[msg.ChainId(idInt)] = call
-
-		oAbi, _ := abi.New(mapprotocol.SignerJson)
-		oracleCall := contract.New(conn, []common.Address{common.HexToAddress(oracleNode)}, oAbi)
-		mapprotocol.SingMapping[msg.ChainId(idInt)] = oracleCall
-
-		fn := mapprotocol.Map2EthHeight(constant.ZeroAddress.Hex(), common.HexToAddress(lightNode), conn.Client())
-		mapprotocol.Map2OtherHeight[msg.ChainId(idInt)] = fn
-	})
-	fn()
-
-	return conn.Client(), nil
+	return c.proofConn.Connect(id, endpoint, mcs, lightNode, oracleNode)
 }
 
 func (c *Chain) Proof(client *ethclient.Client, log *types.Log, endpoint string, proofType int64, selfId,
