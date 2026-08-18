@@ -21,6 +21,7 @@ import (
 	"github.com/mapprotocol/compass/internal/report"
 	"github.com/mapprotocol/compass/pkg/abi"
 	contract2 "github.com/mapprotocol/compass/pkg/contract"
+	"github.com/mapprotocol/compass/pkg/ethclient"
 	"github.com/mapprotocol/compass/pkg/msg"
 	"github.com/mapprotocol/compass/pkg/util"
 	"github.com/urfave/cli/v2"
@@ -259,12 +260,16 @@ func run(ctx *cli.Context, role mapprotocol.Role) error {
 		}
 
 		if idx == 0 {
-			mapprotocol.GlobalMapConn = newChain.(*chain2.Chain).EthClient()
+			mapClient, err := ethClientFromChain(newChain)
+			if err != nil {
+				return err
+			}
+			mapprotocol.GlobalMapConn = mapClient
 			validateAbi, err := abi.New(mapprotocol.ValidateJson)
 			if err != nil {
 				return err
 			}
-			contract.InitDefaultValidator(contract2.New(newChain.(*chain2.Chain).Conn(),
+			contract.InitDefaultValidator(contract2.New(newChain.Conn(),
 				[]common.Address{common.HexToAddress(chainConfig.Opts[chain2.Validate])}, validateAbi))
 			mapprotocol.Init2GetEth22MapNumber(common.HexToAddress(chainConfig.Opts[chain2.LightNode]))
 			mapprotocol.InitOtherChain2MapHeight(common.HexToAddress(chainConfig.Opts[chain2.LightNode]))
@@ -278,6 +283,14 @@ func run(ctx *cli.Context, role mapprotocol.Role) error {
 	c.Start()
 
 	return nil
+}
+
+func ethClientFromChain(chain core.Chain) (*ethclient.Client, error) {
+	provider, ok := chain.(core.EthClientProvider)
+	if !ok {
+		return nil, fmt.Errorf("chain %q does not provide an eth client", chain.Name())
+	}
+	return provider.EthClient(), nil
 }
 
 func filterAPIKeyFromConfig(ctx *cli.Context, cfg *config.Config) string {

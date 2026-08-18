@@ -13,7 +13,6 @@ import (
 	"github.com/ChainSafe/log15"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/log"
 	connection "github.com/mapprotocol/compass/connections/ethereum"
 	"github.com/mapprotocol/compass/core"
 	"github.com/mapprotocol/compass/internal/chain"
@@ -27,11 +26,7 @@ import (
 )
 
 type Chain struct {
-	cfg    *core.ChainConfig
-	conn   core.Connection
-	writer *Writer
-	stop   chan<- int
-	listen core.Listener
+	chain.Base
 }
 
 func New() *Chain {
@@ -103,49 +98,8 @@ func (c *Chain) createChain(chainCfg *core.ChainConfig, logger log15.Logger, sys
 		listen = newSync(cs, handler, conn)
 	}
 
-	return &Chain{
-		conn:   conn,
-		stop:   stop,
-		listen: listen,
-		cfg:    chainCfg,
-		writer: newWriter(conn, config, logger, stop, sysErr, pswd),
-	}, nil
-}
-
-func (c *Chain) SetRouter(r core.Router) {
-	r.Listen(c.cfg.Id, c.writer)
-	c.listen.SetRouter(r)
-}
-
-func (c *Chain) Start() error {
-	err := c.listen.Sync()
-	if err != nil {
-		return err
-	}
-
-	log.Debug("Successfully started Chain")
-	return nil
-}
-
-func (c *Chain) Id() msg.ChainId {
-	return c.cfg.Id
-}
-
-func (c *Chain) Name() string {
-	return c.cfg.Name
-}
-
-// Stop signals to any running routines to exit
-func (c *Chain) Stop() {
-	close(c.stop)
-	if c.conn != nil {
-		c.conn.Close()
-	}
-}
-
-// Conn return Connection interface for relayer register
-func (c *Chain) Conn() core.Connection {
-	return c.conn
+	writer := newWriter(conn, config, logger, stop, sysErr, pswd)
+	return &Chain{Base: chain.NewBase(chainCfg, conn, writer, listen, stop)}, nil
 }
 
 func (c *Chain) Connect(id, endpoint, mcs, lightNode, oracleNode string) (*ethclient.Client, error) {

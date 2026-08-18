@@ -3,23 +3,17 @@ package chain
 import (
 	"github.com/ChainSafe/log15"
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/mapprotocol/compass/core"
 	"github.com/mapprotocol/compass/internal/mapprotocol"
 	"github.com/mapprotocol/compass/pkg/abi"
 	"github.com/mapprotocol/compass/pkg/contract"
 	"github.com/mapprotocol/compass/pkg/ethclient"
 	"github.com/mapprotocol/compass/pkg/keystore"
-	"github.com/mapprotocol/compass/pkg/msg"
 	"github.com/pkg/errors"
 )
 
 type Chain struct {
-	cfg    *core.ChainConfig // The config of the Chain
-	conn   core.Connection   // The chains connection
-	writer *Writer           // The writer of the Chain
-	stop   chan<- int
-	listen core.Listener // The listener of this Chain
+	Base
 }
 
 func New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error, role mapprotocol.Role,
@@ -85,52 +79,10 @@ func New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error, r
 	wri := NewWriter(conn, cfg, logger, stop, sysErr)
 	mapprotocol.MosMapping[cfg.Id] = cfg.McsContract[0].String()
 
-	return &Chain{
-		cfg:    chainCfg,
-		conn:   conn,
-		writer: wri,
-		stop:   stop,
-		listen: listen,
-	}, nil
-}
-
-func (c *Chain) SetRouter(r core.Router) {
-	r.Listen(c.cfg.Id, c.writer)
-	c.listen.SetRouter(r)
-}
-
-func (c *Chain) Start() error {
-	err := c.listen.Sync()
-	if err != nil {
-		return err
-	}
-
-	log.Debug("Successfully started Chain")
-	return nil
-}
-
-func (c *Chain) Id() msg.ChainId {
-	return c.cfg.Id
-}
-
-func (c *Chain) Name() string {
-	return c.cfg.Name
-}
-
-// Stop signals to any running routines to exit
-func (c *Chain) Stop() {
-	close(c.stop)
-	if c.conn != nil {
-		c.conn.Close()
-	}
+	return &Chain{Base: NewBase(chainCfg, conn, wri, listen, stop)}, nil
 }
 
 // EthClient return EthClient for global map connection
 func (c *Chain) EthClient() *ethclient.Client {
-	return c.conn.Client()
-}
-
-// Conn return Connection interface for relayer register
-func (c *Chain) Conn() core.Connection {
-	return c.conn
+	return c.Conn().Client()
 }

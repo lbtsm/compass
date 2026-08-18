@@ -23,6 +23,11 @@ type Chain interface {
 	Conn() Connection
 }
 
+// EthClientProvider is an optional capability for chains backed by an EVM client.
+type EthClientProvider interface {
+	EthClient() *ethclient.Client
+}
+
 type ChainConfig struct {
 	Name             string            // Human-readable chain name
 	Id               msg.ChainId       // ChainID
