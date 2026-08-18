@@ -13,9 +13,12 @@ import (
 type Config struct {
 	chain.Config
 	LightNode, RentNode, FeeKey, FeeType, EnergySupply string
-	EthFrom                                            common.Address
-	McsContract                                        []string
-	Rent                                               bool
+	// APIKey authenticates against hosted TRON gateways such as TronGrid. It is
+	// deployment specific and must come from config, never from the source tree.
+	APIKey      string
+	EthFrom     common.Address
+	McsContract []string
+	Rent        bool
 }
 
 func parseCfg(chainCfg *core.ChainConfig) (*Config, error) {
@@ -38,6 +41,9 @@ func parseCfg(chainCfg *core.ChainConfig) (*Config, error) {
 		}
 	}
 
+	if ele, ok := chainCfg.Opts[chain.ApiKey]; ok && ele != "" {
+		ret.APIKey = ele
+	}
 	if ele, ok := chainCfg.Opts[chain.RentNode]; ok && ele != "" {
 		ret.RentNode = ele
 	}

@@ -48,7 +48,7 @@ func (c *Chain) createChain(chainCfg *core.ChainConfig, logger log15.Logger, sys
 		return nil, err
 	}
 
-	conn := NewConnection(config.Endpoint, logger)
+	conn := NewConnection(config.Endpoint, config.APIKey, logger)
 	err = conn.Connect()
 	if err != nil {
 		return nil, err
