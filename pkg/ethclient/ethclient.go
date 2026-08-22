@@ -622,7 +622,12 @@ type OpReceipt struct {
 func (ec *Client) OpReceipt(ctx context.Context, txHash common.Hash) (*OpReceipt, error) {
 	s := fmt.Sprintf("{\"jsonrpc\": \"2.0\",\"method\": \"eth_getTransactionReceipt\",\"params\": [\"%s\"],\"id\": 1}", txHash.Hex())
 	body := strings.NewReader(s)
-	resp, err := ec.cli.Post(ec.url, "application/json", body)
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, ec.url, body)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := ec.cli.Do(req)
 	if err != nil {
 		return nil, err
 	}
@@ -631,6 +636,16 @@ func (ec *Client) OpReceipt(ctx context.Context, txHash common.Hash) (*OpReceipt
 	var respmsg jsonrpcMessage
 	if err := json.NewDecoder(resp.Body).Decode(&respmsg); err != nil {
 		return nil, err
+	}
+	if len(respmsg.Error) > 0 && string(respmsg.Error) != "null" {
+		var rpcErr struct {
+			Code    int    `json:"code"`
+			Message string `json:"message"`
+		}
+		if err := json.Unmarshal(respmsg.Error, &rpcErr); err != nil {
+			return nil, fmt.Errorf("eth_getTransactionReceipt RPC error: %s", respmsg.Error)
+		}
+		return nil, fmt.Errorf("eth_getTransactionReceipt RPC error %d: %s", rpcErr.Code, rpcErr.Message)
 	}
 
 	data := make([]byte, 0, len(respmsg.Result))

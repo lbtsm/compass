@@ -4,224 +4,23 @@
 package mapo
 
 import (
-	"context"
-	"fmt"
-	"math/big"
-	"strings"
-	"sync"
-	"time"
-
-	"github.com/mapprotocol/compass/internal/mapprotocol"
-	"github.com/mapprotocol/compass/pkg/msg"
-
-	"github.com/ethereum/go-ethereum/ethdb/memorydb"
-	"github.com/mapprotocol/compass/internal/arb"
-	"github.com/mapprotocol/compass/internal/constant"
-	"github.com/mapprotocol/compass/internal/op"
-	"github.com/mapprotocol/compass/pkg/util"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
-	"github.com/ethereum/go-ethereum/trie"
 	maptypes "github.com/mapprotocol/atlas/core/types"
-	"github.com/mapprotocol/compass/internal/proof"
+	"github.com/mapprotocol/compass/internal/mapprotocol"
 	"github.com/mapprotocol/compass/pkg/ethclient"
-	"github.com/pkg/errors"
+	"github.com/mapprotocol/compass/pkg/msg"
 )
 
 func AssembleEthProof(conn *ethclient.Client, log *types.Log, receipts []*types.Receipt, header *maptypes.Header,
-	method string, fId msg.ChainId, proofType int64, sign [][]byte) ([]byte, error) {
-	var (
-		pack    []byte
-		err     error
-		orderId = log.Topics[1]
-	)
-	idx := 0
-	for i, ele := range receipts[log.TxIndex].Logs {
-		if ele.Index != log.Index {
-			continue
-		}
-		idx = i
-	}
-	receipt, err := mapprotocol.GetTxReceipt(receipts[log.TxIndex])
-	if err != nil {
-		return nil, err
-	}
-	prf, receiptHash, err := ethProof(conn, fId, log.TxIndex, receipts)
-	if err != nil {
-		return nil, err
-	}
-
-	var key []byte
-	key = rlp.AppendUint64(key[:0], uint64(log.TxIndex))
-
-	switch proofType {
-	case constant.ProofTypeOfOrigin:
-	case constant.ProofTypeOfZk:
-	case constant.ProofTypeOfOracle:
-		pack, err = proof.Oracle(log.BlockNumber, receipt, key, prf, fId, method, idx,
-			mapprotocol.ProofAbi, orderId, false)
-	case constant.ProofTypeOfNewOracle:
-		if receiptHash.Hex() != header.ReceiptHash.Hex() {
-			fmt.Println("Evm generate receiptHash ", receiptHash, "oracle", header.ReceiptHash.Hex(), " not same")
-			return nil, errors.New("receiptHash not same")
-		}
-		fallthrough
-	case constant.ProofTypeOfLogOracle:
-		pack, err = proof.SignOracle(&maptypes.Header{
-			ReceiptHash: receiptHash,
-			Number:      big.NewInt(int64(log.BlockNumber)),
-		}, receipt, key, prf, fId, idx, method, sign, log, proofType)
-	}
-	if err != nil {
-		return nil, err
-	}
-
-	return pack, nil
+	method string, fromChainID msg.ChainId, proofType int64, sign [][]byte) ([]byte, error) {
+	return NewProofAssembler(conn).AssembleEth(log, receipts, header, method, fromChainID, proofType, sign)
 }
 
-func ethProof(conn *ethclient.Client, fId msg.ChainId, txIdx uint, receipts []*types.Receipt) ([][]byte, common.Hash, error) {
-	var dls proof.DerivableList
-	switch fId {
-	case constant.ArbChainId, constant.Robinhood:
-		pr := arb.Receipts{}
-		for _, r := range receipts {
-			pr = append(pr, &arb.Receipt{Receipt: r})
-		}
-		dls = pr
-	case constant.BaseChainId, constant.OptimismChainId:
-		pr := op.Receipts{}
-		results := make([]*op.Receipt, len(receipts))
-		var wg sync.WaitGroup
-		for i, r := range receipts {
-			wg.Add(1)
-			go func(i int, r *types.Receipt) {
-				defer wg.Done()
-				tmp, err := conn.OpReceipt(context.Background(), r.TxHash)
-				if err != nil {
-					return
-				}
-				if tmp == nil {
-					return
-				}
-				vptr := uint64(0)
-				nptr := uint64(0)
-				if tmp.DepositReceiptVersion != "" {
-					version, _ := big.NewInt(0).SetString(strings.TrimPrefix(tmp.DepositReceiptVersion, "0x"), 16)
-					vptr = version.Uint64()
-				}
-				if tmp.DepositNonce != "" {
-					nonce, _ := big.NewInt(0).SetString(strings.TrimPrefix(tmp.DepositNonce, "0x"), 16)
-					nptr = nonce.Uint64()
-				}
-				results[i] = &op.Receipt{Receipt: r, DepositReceiptVersion: &vptr, DepositNonce: &nptr}
-			}(i, r)
-			if i%30 == 0 {
-				time.Sleep(100 * time.Millisecond)
-			}
-		}
-		wg.Wait()
-		for _, result := range results {
-			if result == nil {
-				continue
-			}
-			pr = append(pr, result)
-		}
-		dls = pr
-	default:
-		dls = types.Receipts(receipts)
-	}
-	ret, err := proof.Get(dls, txIdx)
-	if err != nil {
-		return nil, constant.ZeroAddress.Hash(), err
-	}
-
-	tr, _ := trie.New(common.Hash{}, trie.NewDatabase(memorydb.New()))
-	tr = proof.DeriveTire(dls, tr)
-
-	return ret, tr.Hash(), nil
-}
-
-func AssembleMapProof(cli *ethclient.Client, log *types.Log, receipts []*types.Receipt,
-	header *maptypes.Header, fId msg.ChainId, method, zkUrl string, proofType int64, sign [][]byte) (uint64, []byte, error) {
-	uToChainID := big.NewInt(0).SetBytes(log.Topics[2].Bytes()[8:16]).Uint64()
-	txIndex := log.TxIndex
-	orderId := log.Topics[1]
-	aggPK, ist, _, err := mapprotocol.GetAggPK(cli, new(big.Int).Sub(header.Number, big.NewInt(1)), header.Extra)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	receipt, err := mapprotocol.GetTxReceipt(receipts[txIndex])
-	prf, err := proof.Get(types.Receipts(receipts), txIndex)
-	if err != nil {
-		return 0, nil, err
-	}
-
-	var key []byte
-	key = rlp.AppendUint64(key[:0], uint64(txIndex))
-	ek := util.Key2Hex(key, len(prf))
-
-	var payloads []byte
-	name := mapprotocol.Default().ChainNameOf(msg.ChainId(uToChainID))
-	switch name {
-	default:
-		istanbulExtra := mapprotocol.ConvertIstanbulExtra(ist)
-		nr := mapprotocol.MapTxReceipt{
-			PostStateOrStatus: receipt.PostStateOrStatus,
-			CumulativeGasUsed: receipt.CumulativeGasUsed,
-			Bloom:             receipt.Bloom,
-			Logs:              receipt.Logs,
-		}
-
-		nrRlp, err := rlp.EncodeToBytes(nr)
-		if err != nil {
-			return 0, nil, err
-		}
-		rp := mapprotocol.NewMapReceiptProof{
-			Header:   mapprotocol.ConvertHeader(header),
-			AggPk:    aggPK,
-			KeyIndex: ek,
-			Proof:    prf,
-			Ist:      *istanbulExtra,
-			TxReceiptRlp: mapprotocol.TxReceiptRlp{
-				ReceiptType: receipt.ReceiptType,
-				ReceiptRlp:  nrRlp,
-			},
-		}
-
-		idx := 0
-		for i, ele := range receipts[txIndex].Logs {
-			if ele.Index != log.Index {
-				continue
-			}
-			idx = i
-		}
-
-		switch proofType {
-		case constant.ProofTypeOfZk:
-			zkProof, err := mapprotocol.GetZkProof(zkUrl, fId, header.Number.Uint64())
-			if err != nil {
-				return 0, nil, errors.Wrap(err, "GetZkProof failed")
-			}
-			payloads, err = proof.Pack(fId, method, mapprotocol.Mcs, rp, zkProof)
-		case constant.ProofTypeOfOracle:
-			payloads, err = proof.Oracle(header.Number.Uint64(), receipt, key, prf, fId,
-				method, idx, mapprotocol.ProofAbi, orderId, false)
-		case constant.ProofTypeOfNewOracle:
-			fallthrough
-		case constant.ProofTypeOfLogOracle:
-			payloads, err = proof.SignOracle(header, receipt, key, prf, fId, idx, method, sign, log, proofType)
-		default:
-			payloads, err = proof.V3Pack(fId, method, mapprotocol.Map2Other, idx, orderId, true, rp)
-		}
-		if err != nil {
-			return 0, nil, err
-		}
-
-	}
-	return uToChainID, payloads, nil
+func AssembleMapProof(conn *ethclient.Client, log *types.Log, receipts []*types.Receipt,
+	header *maptypes.Header, fromChainID msg.ChainId, method, zkURL string,
+	proofType int64, sign [][]byte) (uint64, []byte, error) {
+	return NewProofAssembler(conn).AssembleMap(log, receipts, header, fromChainID, method, zkURL, proofType, sign)
 }
 
 func Key2Hex(str []byte, proofLength int) []byte {
@@ -255,8 +54,8 @@ func ConvertNearReceipt(h *mapprotocol.TxReceipt) *TxReceipt {
 	logs := make([]TxLog, 0, len(h.Logs))
 	for _, log := range h.Logs {
 		topics := make([]string, 0, len(log.Topics))
-		for _, t := range log.Topics {
-			topics = append(topics, "0x"+common.Bytes2Hex(t))
+		for _, topic := range log.Topics {
+			topics = append(topics, "0x"+common.Bytes2Hex(topic))
 		}
 		logs = append(logs, TxLog{
 			Address: log.Addr,
