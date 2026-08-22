@@ -53,6 +53,7 @@ func New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error, r
 	}
 
 	var listen core.Listener
+	registry := mapprotocol.Default()
 	cs := NewCommonSync(conn, cfg, logger, stop, sysErr, bs, opts...)
 	cs.RegisterState(cfg.Name, string(role))
 	switch role {
@@ -64,26 +65,26 @@ func New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error, r
 				return nil, errors.Wrap(err, "Map2Other get init headerHeight failed")
 			}
 			logger.Info("Map2other Current situation", "id", cfg.Id, "height", height, "lightNode", cfg.LightNode)
-			mapprotocol.SyncOtherMap[cfg.Id] = height
-			mapprotocol.Map2OtherHeight[cfg.Id] = fn
+			registry.SetMap2OtherInitHeight(cfg.Id, height)
+			registry.SetMap2OtherHeight(cfg.Id, fn)
 		}
 		listen = NewMaintainer(cs)
 	case mapprotocol.RoleOfMessenger:
 		oracleAbi, _ := abi.New(mapprotocol.OracleAbiJson)
 		call := contract.New(conn, cfg.McsContract, oracleAbi)
-		mapprotocol.ContractMapping[cfg.Id] = call
+		registry.SetMosCall(cfg.Id, call)
 		listen = NewMessenger(cs)
 	case mapprotocol.RoleOfOracle:
 		otherAbi, _ := abi.New(mapprotocol.OtherAbi)
 		call := contract.New(conn, []common.Address{cfg.LightNode}, otherAbi)
-		mapprotocol.LightNodeMapping[cfg.Id] = call
+		registry.SetLightNodeCall(cfg.Id, call)
 		listen = NewOracle(cs)
 	}
 	oAbi, _ := abi.New(mapprotocol.SignerJson)
 	oracleCall := contract.New(conn, []common.Address{cfg.OracleNode}, oAbi)
-	mapprotocol.SingMapping[cfg.Id] = oracleCall
+	registry.SetSignerCall(cfg.Id, oracleCall)
 	wri := NewWriter(conn, cfg, logger, stop, sysErr)
-	mapprotocol.MosMapping[cfg.Id] = cfg.McsContract[0].String()
+	registry.SetMosAddress(cfg.Id, cfg.McsContract[0].String())
 
 	return &Chain{
 		cfg:    chainCfg,

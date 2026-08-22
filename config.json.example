@@ -97,6 +97,21 @@
          "syncToMap": "true",
          "eth2Url": "http://18.138.248.113:9596"
        }
+     },
+     {
+       "name": "tron",
+       "type": "tron",
+       "id": "728126428",
+       "endpoint": "grpc.trongrid.io:50051",
+       "from": "TXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+       "opts": {
+         "tronmcs": "0x0000000000000000000000000000000000000000",
+         "lightnode": "TXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+         "http": "true",
+         "eth2Url": "http://18.138.248.113:8545",
+         "apiKey": "your-trongrid-api-key",
+         "syncToMap": "true"
+       }
      }
   ]
 }

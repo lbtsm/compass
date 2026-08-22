@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"math/big"
 	"strconv"
-	gosync "sync"
 
 	"github.com/mapprotocol/compass/internal/mapprotocol"
 	"github.com/mapprotocol/compass/pkg/keystore"
@@ -17,7 +16,6 @@ import (
 	connection "github.com/mapprotocol/compass/connections/ethereum"
 	"github.com/mapprotocol/compass/core"
 	"github.com/mapprotocol/compass/internal/chain"
-	"github.com/mapprotocol/compass/internal/constant"
 	"github.com/mapprotocol/compass/internal/proof"
 	"github.com/mapprotocol/compass/internal/tx"
 	"github.com/mapprotocol/compass/pkg/abi"
@@ -32,10 +30,14 @@ type Chain struct {
 	writer *Writer
 	stop   chan<- int
 	listen core.Listener
+
+	proofConn *chain.ProofConnector
 }
 
 func New() *Chain {
-	return &Chain{}
+	return &Chain{
+		proofConn: chain.NewProofConnector(mapprotocol.Default(), chain.DefaultProofDialer, nil),
+	}
 }
 
 func (c *Chain) New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error, role mapprotocol.Role) (core.Chain, error) {
@@ -48,7 +50,7 @@ func (c *Chain) createChain(chainCfg *core.ChainConfig, logger log15.Logger, sys
 		return nil, err
 	}
 
-	conn := NewConnection(config.Endpoint, logger)
+	conn := NewConnection(config.Endpoint, config.APIKey, logger)
 	err = conn.Connect()
 	if err != nil {
 		return nil, err
@@ -91,11 +93,11 @@ func (c *Chain) createChain(chainCfg *core.ChainConfig, logger log15.Logger, sys
 	case mapprotocol.RoleOfOracle:
 		oAbi, _ := abi.New(mapprotocol.SignerJson)
 		oracleCall := contract.New(ethConn, []common.Address{config.OracleNode}, oAbi)
-		mapprotocol.SingMapping[config.Id] = oracleCall
+		mapprotocol.Default().SetSignerCall(config.Id, oracleCall)
 
 		otherAbi, _ := abi.New(mapprotocol.OtherAbi)
 		call := contract.New(conn, []common.Address{common.HexToAddress(config.LightNode)}, otherAbi)
-		mapprotocol.LightNodeMapping[config.Id] = call
+		mapprotocol.Default().SetLightNodeCall(config.Id, call)
 		handler := oracle
 		if config.Filter {
 			handler = filterOracle
@@ -149,29 +151,7 @@ func (c *Chain) Conn() core.Connection {
 }
 
 func (c *Chain) Connect(id, endpoint, mcs, lightNode, oracleNode string) (*ethclient.Client, error) {
-	conn := connection.NewConnection(endpoint, true, nil, nil, big.NewInt(chain.DefaultGasLimit),
-		big.NewInt(chain.DefaultGasPrice), chain.DefaultGasMultiplier)
-	err := conn.Connect()
-	if err != nil {
-		return nil, err
-	}
-
-	fn := gosync.OnceFunc(func() {
-		idInt, _ := strconv.ParseUint(id, 10, 64)
-		oracleAbi, _ := abi.New(mapprotocol.OracleAbiJson)
-		call := contract.New(conn, []common.Address{common.HexToAddress(mcs)}, oracleAbi)
-		mapprotocol.ContractMapping[msg.ChainId(idInt)] = call
-
-		oAbi, _ := abi.New(mapprotocol.SignerJson)
-		oracleCall := contract.New(conn, []common.Address{common.HexToAddress(oracleNode)}, oAbi)
-		mapprotocol.SingMapping[msg.ChainId(idInt)] = oracleCall
-
-		fn := mapprotocol.Map2EthHeight(constant.ZeroAddress.Hex(), common.HexToAddress(lightNode), conn.Client())
-		mapprotocol.Map2OtherHeight[msg.ChainId(idInt)] = fn
-	})
-	fn()
-
-	return conn.Client(), nil
+	return c.proofConn.Connect(id, endpoint, mcs, lightNode, oracleNode)
 }
 
 func (c *Chain) Proof(client *ethclient.Client, l *types.Log, endpoint string, proofType int64, selfId,

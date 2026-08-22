@@ -50,6 +50,7 @@ var (
 	Rent                  = "rent"
 	Addr                  = "addr"
 	Validate              = "validate"
+	ApiKey                = "apiKey"
 )
 
 // Config encapsulates all necessary parameters in ethereum compatible forms

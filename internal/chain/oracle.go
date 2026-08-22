@@ -187,7 +187,7 @@ func log2Oracle(m *Oracle, logs []types.Log, blockNumber *big.Int, filterId int6
 		toChainID := uint64(m.Cfg.MapChainID)
 		if m.Cfg.Id == m.Cfg.MapChainID {
 			toChainID = getToChainId(log.Topics)
-			if _, ok := mapprotocol.OnlineChaId[msg.ChainId(toChainID)]; !ok {
+			if _, ok := mapprotocol.Default().ChainName(msg.ChainId(toChainID)); !ok {
 				m.Log.Info("Map Oracle Found a log that is not the current task", "blockNumber", log.BlockNumber, "toChainID", toChainID)
 				continue
 			}
@@ -200,7 +200,7 @@ func log2Oracle(m *Oracle, logs []types.Log, blockNumber *big.Int, filterId int6
 				return errors.Wrap(err, "Get2OtherNodeType failed")
 			}
 		} else {
-			nodeType, err = mapprotocol.GetNodeTypeByManager(mapprotocol.MethodOfNodeType, big.NewInt(int64(m.Cfg.Id)))
+			nodeType, err = mapprotocol.Default().LightNodeType(mapprotocol.MethodOfNodeType, big.NewInt(int64(m.Cfg.Id)))
 			if err != nil {
 				return errors.Wrap(err, "GetOther2MapNodeType failed")
 			}
@@ -356,7 +356,7 @@ func GetMap2OtherNodeType(idx int, toChainID uint64) (*big.Int, error) {
 
 	}
 
-	call, ok := mapprotocol.LightNodeMapping[msg.ChainId(toChainID)]
+	call, ok := mapprotocol.Default().LightNodeCall(msg.ChainId(toChainID))
 	if !ok {
 		return nil, ContractNotExist
 	}

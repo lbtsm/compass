@@ -13,19 +13,23 @@ import (
 	ethcommon "github.com/ethereum/go-ethereum/common"
 	"github.com/lbtsm/gotron-sdk/pkg/client"
 	"github.com/mapprotocol/compass/pkg/ethclient"
+	"github.com/pkg/errors"
 )
 
 type Connection struct {
-	endpoint                  string
+	endpoint, apiKey          string
 	cli                       *client.GrpcClient
 	log                       log15.Logger
 	stop                      chan int
 	reqTime, cacheBlockNumber int64
 }
 
-func NewConnection(endpoint string, log log15.Logger) *Connection {
+// NewConnection builds a TRON gRPC connection. apiKey may be empty: a self hosted
+// FullNode needs none, a hosted gateway such as TronGrid does.
+func NewConnection(endpoint, apiKey string, log log15.Logger) *Connection {
 	return &Connection{
 		endpoint: endpoint,
+		apiKey:   apiKey,
 		log:      log,
 		stop:     make(chan int),
 	}
@@ -34,7 +38,14 @@ func NewConnection(endpoint string, log log15.Logger) *Connection {
 // Connect starts the ethereum WS connection
 func (c *Connection) Connect() error {
 	c.cli = client.NewGrpcClient(c.endpoint)
-	c.cli.SetAPIKey("ebd4248d-cd13-4f41-9622-acdf84bca55f")
+	if c.apiKey != "" {
+		if err := c.cli.SetAPIKey(c.apiKey); err != nil {
+			return errors.Wrap(err, "set tron api key failed")
+		}
+	} else if c.log != nil {
+		c.log.Warn("Tron connection has no apiKey configured, hosted gateways will reject it",
+			"endpoint", c.endpoint)
+	}
 	err := c.cli.Start(grpc.WithInsecure())
 	if err != nil {
 		return err

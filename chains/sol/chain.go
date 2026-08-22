@@ -73,7 +73,7 @@ func createChain(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- 
 	case mapprotocol.RoleOfOracle:
 		listen = newSync(cs, oracleHandler, conn, config, conn.cli)
 	}
-	mapprotocol.MosMapping[config.Id] = config.McsContract[0]
+	mapprotocol.Default().SetMosAddress(config.Id, config.McsContract[0])
 
 	return &Chain{
 		conn:   conn,

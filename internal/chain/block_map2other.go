@@ -59,7 +59,7 @@ func (w *Writer) execMap2OtherMsg(m msg.Message) bool {
 			needNonce = w.needNonce(err)
 			errorCount++
 			if errorCount >= 10 {
-				util.Alarm(context.Background(), fmt.Sprintf("map2%s updateHeader failed, err is %s", mapprotocol.OnlineChaId[m.Destination], err.Error()))
+				util.Alarm(context.Background(), fmt.Sprintf("map2%s updateHeader failed, err is %s", mapprotocol.Default().ChainNameOf(m.Destination), err.Error()))
 				errorCount = 0
 			}
 			time.Sleep(constant.TxRetryInterval)

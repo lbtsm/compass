@@ -243,8 +243,8 @@ func (w *Writer) proposal(m msg.Message) bool {
 }
 
 func (w *Writer) mosAlarm(m msg.Message, tx interface{}, err error) {
-	util.Alarm(context.Background(), fmt.Sprintf("mos %s2%s failed, srcHash=%v err is %s", mapprotocol.OnlineChaId[m.Source],
-		mapprotocol.OnlineChaId[m.Destination], tx, err.Error()))
+	util.Alarm(context.Background(), fmt.Sprintf("mos %s2%s failed, srcHash=%v err is %s", mapprotocol.Default().ChainNameOf(m.Source),
+		mapprotocol.Default().ChainNameOf(m.Destination), tx, err.Error()))
 }
 
 func (w *Writer) call(toAddress *common.Address, input []byte, useAbi abi.ABI, method string) error {

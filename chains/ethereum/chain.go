@@ -7,7 +7,6 @@ import (
 	"math/big"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/ChainSafe/log15"
 	"github.com/ethereum/go-ethereum/common"
@@ -20,17 +19,32 @@ import (
 	"github.com/mapprotocol/compass/internal/mapo"
 	"github.com/mapprotocol/compass/internal/mapprotocol"
 	"github.com/mapprotocol/compass/internal/tx"
-	"github.com/mapprotocol/compass/pkg/abi"
-	"github.com/mapprotocol/compass/pkg/contract"
 	"github.com/mapprotocol/compass/pkg/ethclient"
 	"github.com/mapprotocol/compass/pkg/msg"
 )
 
 type Chain struct {
+	proofConn *chain.ProofConnector
 }
 
 func New() *Chain {
-	return &Chain{}
+	c := &Chain{}
+	c.proofConn = chain.NewProofConnector(mapprotocol.Default(), chain.DefaultProofDialer, c.registerHeight)
+	return c
+}
+
+// registerHeight publishes the height providers a proof request needs. The MAP
+// chain is the one that answers "how far have you followed chain X", every other
+// chain answers "how far have I followed MAP".
+func (c *Chain) registerHeight(registry *mapprotocol.Registry, id msg.ChainId, conn core.Connection, lightNode string) error {
+	if uint64(id) == constant.MapChainId {
+		registry.SetMapConn(conn.Client())
+		registry.SetLightManager(mapprotocol.NewLightManager(conn.Client(), common.HexToAddress(lightNode)))
+		return nil
+	}
+	registry.SetMap2OtherHeight(id, mapprotocol.Map2EthHeight(constant.ZeroAddress.Hex(),
+		common.HexToAddress(lightNode), conn.Client()))
+	return nil
 }
 
 func (c *Chain) New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan<- error,
@@ -38,7 +52,7 @@ func (c *Chain) New(chainCfg *core.ChainConfig, logger log15.Logger, sysErr chan
 	opts := make([]chain.SyncOpt, 0)
 
 	opts = append(opts, chain.OptOfInitHeight(mapprotocol.HeaderOneCount))
-	if strconv.FormatUint(uint64(chainCfg.Id), 10) == mapprotocol.MapId {
+	if strconv.FormatUint(uint64(chainCfg.Id), 10) == mapprotocol.Default().MapID() {
 		opts = append(opts, chain.OptOfSync2Map(c.mapToOther))
 		opts = append(opts, chain.OptOfInitHeight(mapprotocol.EpochOfMap))
 	} else {
@@ -77,14 +91,14 @@ func (c *Chain) mapToOther(m *chain.Maintainer, latestBlock *big.Int) error {
 	msgpayload := []interface{}{input}
 	waitCount := len(m.Cfg.SyncChainIDList)
 	for _, cid := range m.Cfg.SyncChainIDList {
-		if v, ok := mapprotocol.SyncOtherMap[cid]; ok && latestBlock.Cmp(v) <= 0 {
+		if v, ok := mapprotocol.Default().Map2OtherInitHeight(cid); ok && latestBlock.Cmp(v) <= 0 {
 			waitCount--
 			m.Log.Info("map to other current less than synchronized headerHeight", "toChainId", cid, "synced height", v,
 				"current height", latestBlock)
 			continue
 		}
 		// Query the latest height for comparison
-		if fn, ok := mapprotocol.Map2OtherHeight[cid]; ok {
+		if fn, ok := mapprotocol.Default().Map2OtherHeight(cid); ok {
 			height, err := fn()
 			if err != nil {
 				return fmt.Errorf("get headerHeight failed, cid(%d),err is %v", cid, err)
@@ -96,7 +110,7 @@ func (c *Chain) mapToOther(m *chain.Maintainer, latestBlock *big.Int) error {
 				continue
 			}
 		}
-		if name, ok := mapprotocol.OnlineChaId[cid]; ok && strings.ToLower(name) == "near" {
+		if name, ok := mapprotocol.Default().ChainName(cid); ok && strings.ToLower(name) == "near" {
 			param := map[string]interface{}{
 				"header": mapprotocol.ConvertNearNeedHeader(header),
 				"agg_pk": map[string]interface{}{
@@ -127,7 +141,7 @@ func (c *Chain) mapToOther(m *chain.Maintainer, latestBlock *big.Int) error {
 }
 
 func (c *Chain) headerToMap(m *chain.Maintainer, latestBlock *big.Int) error {
-	syncedHeight, err := mapprotocol.Get2MapHeight(m.Cfg.Id)
+	syncedHeight, err := mapprotocol.Default().Chain2MapHeight(m.Cfg.Id)
 	if err != nil {
 		m.Log.Error("Get synced Height failed", "err", err)
 		return err
@@ -219,34 +233,7 @@ func (c *Chain) rlpEthereumHeaders(source, destination msg.ChainId, headers []ty
 }
 
 func (c *Chain) Connect(id, endpoint, mcs, lightNode, oracleNode string) (*ethclient.Client, error) {
-	conn := connection.NewConnection(endpoint, true, nil, nil, big.NewInt(chain.DefaultGasLimit),
-		big.NewInt(chain.DefaultGasPrice), chain.DefaultGasMultiplier)
-	err := conn.Connect()
-	if err != nil {
-		return nil, err
-	}
-
-	fn := sync.OnceFunc(func() {
-		idInt, _ := strconv.ParseUint(id, 10, 64)
-		oracleAbi, _ := abi.New(mapprotocol.OracleAbiJson)
-		call := contract.New(conn, []common.Address{common.HexToAddress(mcs)}, oracleAbi)
-		mapprotocol.ContractMapping[msg.ChainId(idInt)] = call
-
-		oAbi, _ := abi.New(mapprotocol.SignerJson)
-		oracleCall := contract.New(conn, []common.Address{common.HexToAddress(oracleNode)}, oAbi)
-		mapprotocol.SingMapping[msg.ChainId(idInt)] = oracleCall
-
-		if idInt == constant.MapChainId {
-			mapprotocol.GlobalMapConn = conn.Client()
-			mapprotocol.InitOtherChain2MapHeight(common.HexToAddress(lightNode))
-		} else {
-			fn := mapprotocol.Map2EthHeight(constant.ZeroAddress.Hex(), common.HexToAddress(lightNode), conn.Client())
-			mapprotocol.Map2OtherHeight[msg.ChainId(idInt)] = fn
-		}
-	})
-	fn()
-
-	return conn.Client(), nil
+	return c.proofConn.Connect(id, endpoint, mcs, lightNode, oracleNode)
 }
 
 func (c *Chain) Proof(client *ethclient.Client, log *types.Log, endpoint string, proofType int64, selfId,
@@ -296,7 +283,7 @@ func (c *Chain) Proof(client *ethclient.Client, log *types.Log, endpoint string,
 func (c *Chain) Maintainer(client *ethclient.Client, selfId, toChainId uint64, srcEndpoint string) ([]byte, error) {
 	ret := make([]byte, 0)
 	if selfId == constant.MapChainId {
-		syncedHeight, err := mapprotocol.Map2OtherHeight[msg.ChainId(toChainId)]()
+		syncedHeight, err := mapprotocol.Default().Map2OtherSyncedHeight(msg.ChainId(toChainId))
 		if err != nil {
 			return nil, err
 		}

@@ -209,6 +209,9 @@ func run(ctx *cli.Context, role mapprotocol.Role) error {
 	allChains = append(allChains, cfg.MapChain)
 	allChains = append(allChains, cfg.Chains...)
 
+	// registry owns the cross-chain runtime state the chains below register into.
+	registry := mapprotocol.Default()
+
 	for idx, ele := range allChains {
 		ks := ele.KeystorePath
 		if ks == "" {
@@ -218,7 +221,7 @@ func run(ctx *cli.Context, role mapprotocol.Role) error {
 		if err != nil {
 			return err
 		}
-		mapprotocol.MapId = cfg.MapChain.Id
+		registry.SetMapID(cfg.MapChain.Id)
 		ele.Opts[config.MapChainID] = cfg.MapChain.Id
 		chainConfig := &core.ChainConfig{
 			Name:             ele.Name,
@@ -259,20 +262,19 @@ func run(ctx *cli.Context, role mapprotocol.Role) error {
 		}
 
 		if idx == 0 {
-			mapprotocol.GlobalMapConn = newChain.(*chain2.Chain).EthClient()
+			mapClient := newChain.(*chain2.Chain).EthClient()
+			registry.SetMapConn(mapClient)
 			validateAbi, err := abi.New(mapprotocol.ValidateJson)
 			if err != nil {
 				return err
 			}
 			contract.InitDefaultValidator(contract2.New(newChain.(*chain2.Chain).Conn(),
 				[]common.Address{common.HexToAddress(chainConfig.Opts[chain2.Validate])}, validateAbi))
-			mapprotocol.Init2GetEth22MapNumber(common.HexToAddress(chainConfig.Opts[chain2.LightNode]))
-			mapprotocol.InitOtherChain2MapHeight(common.HexToAddress(chainConfig.Opts[chain2.LightNode]))
-			mapprotocol.InitLightManager(common.HexToAddress(chainConfig.Opts[chain2.LightNode]))
-			mapprotocol.LightManagerNodeType(common.HexToAddress(chainConfig.Opts[chain2.LightNode]))
+			registry.SetLightManager(mapprotocol.NewLightManager(mapClient,
+				common.HexToAddress(chainConfig.Opts[chain2.LightNode])))
 		}
 
-		mapprotocol.OnlineChaId[chainConfig.Id] = chainConfig.Name
+		registry.SetChainName(chainConfig.Id, chainConfig.Name)
 		c.AddChain(newChain)
 	}
 	c.Start()
