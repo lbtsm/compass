@@ -121,13 +121,21 @@ func (w *Writer) sendSolCrossInTxs(resp *butter.SolCrossInResp, receiveOpenDone 
 	return sendSolCrossInTxs(resp, receiveOpenDone, w.sendSolCrossInTx)
 }
 
+// errTxNotConfirmed marks a tx that was broadcast but whose result is unknown,
+// so its effect may already be on chain.
+var errTxNotConfirmed = errors.New("tx not confirmed")
+
+// sendSolCrossInTxs sends the txs of the first usable route. A swap order
+// returns receiveOpenExecute plus the two-step fallback receiveOpen and
+// receiveExecute: the atomic tx goes first, and the fallback is only used when
+// the atomic tx was rejected before reaching the chain.
 func sendSolCrossInTxs(
 	resp *butter.SolCrossInResp,
 	receiveOpenDone bool,
 	send func(butter.SolCrossInTxParam, int) (string, error),
 ) ([]string, bool, error) {
-	if resp == nil || len(resp.Data) == 0 {
-		return nil, receiveOpenDone, errors.New("solCrossIn response data is empty")
+	if resp == nil {
+		return nil, receiveOpenDone, errors.New("solCrossIn response is empty")
 	}
 	txParams := solCrossInTxParams(resp)
 	if len(txParams) == 0 {
@@ -146,52 +154,59 @@ func sendSolCrossInTxs(
 		return []string{txHash}, receiveOpenDone, nil
 	}
 
-	switch len(txParams) {
-	case 1:
-		txHash, err := send(txParams[0], 0)
-		if err != nil {
-			return nil, receiveOpenDone, err
-		}
-		return []string{txHash}, receiveOpenDone, nil
-	case 2:
-		open, ok := findReceiveOpenTxParam(txParams)
-		if !ok {
-			return nil, receiveOpenDone, errors.New("receiveOpen txParam is missing")
-		}
-		execute, ok := findSolCrossInTxParam(txParams, "receiveExecute")
-		if !ok {
-			return nil, receiveOpenDone, errors.New("receiveExecute txParam is missing")
-		}
-
-		txHashes := make([]string, 0, 2)
-		txHash, err := send(open, 0)
-		if err != nil && !receiveOpenAlreadyDone(err) {
-			return nil, receiveOpenDone, err
-		}
-		receiveOpenDone = true
-		if err == nil {
-			txHashes = append(txHashes, txHash)
-		}
-
-		txHash, err = send(execute, 1)
-		if err != nil {
-			return txHashes, receiveOpenDone, err
-		}
-		txHashes = append(txHashes, txHash)
-		return txHashes, receiveOpenDone, nil
-	case 3:
-		openExecute, ok := findSolCrossInTxParam(txParams, "receiveOpenExecute")
-		if !ok {
-			return nil, receiveOpenDone, errors.New("receiveOpenExecute txParam is missing")
-		}
+	if openExecute, ok := findSolCrossInTxParam(txParams, "receiveOpenExecute"); ok {
 		txHash, err := send(openExecute, 0)
-		if err != nil {
+		if err == nil {
+			return []string{txHash}, receiveOpenDone, nil
+		}
+		_, hasOpen := findReceiveOpenTxParam(txParams)
+		_, hasExecute := findSolCrossInTxParam(txParams, "receiveExecute")
+		if errors.Is(err, errTxNotConfirmed) || !hasOpen || !hasExecute {
 			return nil, receiveOpenDone, err
 		}
-		return []string{txHash}, receiveOpenDone, nil
-	default:
-		return nil, receiveOpenDone, fmt.Errorf("unsupported solCrossIn txParam count: %d", len(txParams))
+		// rejected before reaching the chain, so no open state exists yet
+		return sendOpenThenExecute(txParams, receiveOpenDone, send)
 	}
+
+	if _, ok := findReceiveOpenTxParam(txParams); ok {
+		return sendOpenThenExecute(txParams, receiveOpenDone, send)
+	}
+
+	// receiveDirect, a single tx
+	txHash, err := send(txParams[0], 0)
+	if err != nil {
+		return nil, receiveOpenDone, err
+	}
+	return []string{txHash}, receiveOpenDone, nil
+}
+
+func sendOpenThenExecute(
+	txParams []butter.SolCrossInTxParam,
+	receiveOpenDone bool,
+	send func(butter.SolCrossInTxParam, int) (string, error),
+) ([]string, bool, error) {
+	open, _ := findReceiveOpenTxParam(txParams)
+	execute, ok := findSolCrossInTxParam(txParams, "receiveExecute")
+	if !ok {
+		return nil, receiveOpenDone, errors.New("receiveExecute txParam is missing")
+	}
+
+	txHashes := make([]string, 0, 2)
+	txHash, err := send(open, 0)
+	if err != nil && !receiveOpenAlreadyDone(err) {
+		return nil, receiveOpenDone, err
+	}
+	receiveOpenDone = true
+	if err == nil {
+		txHashes = append(txHashes, txHash)
+	}
+
+	txHash, err = send(execute, 1)
+	if err != nil {
+		return txHashes, receiveOpenDone, err
+	}
+	txHashes = append(txHashes, txHash)
+	return txHashes, receiveOpenDone, nil
 }
 
 func receiveOpenAlreadyDone(err error) bool {
@@ -199,7 +214,7 @@ func receiveOpenAlreadyDone(err error) bool {
 }
 
 func solCrossInTxParams(resp *butter.SolCrossInResp) []butter.SolCrossInTxParam {
-	for _, item := range resp.Data {
+	for _, item := range resp.Data.RouteWithTxParams {
 		if len(item.TxParam) > 0 {
 			return item.TxParam
 		}
@@ -234,7 +249,7 @@ func (w *Writer) sendSolCrossInTx(txParam butter.SolCrossInTxParam, idx int) (st
 	}
 	w.log.Info("Submitted solCrossIn transaction", "index", idx, "step", txParam.Step, "mcsTx", mcsTx)
 	if err = w.txStatus(*mcsTx); err != nil {
-		return "", err
+		return "", fmt.Errorf("%w: %s, %v", errTxNotConfirmed, mcsTx.String(), err)
 	}
 	return mcsTx.String(), nil
 }

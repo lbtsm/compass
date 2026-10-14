@@ -59,8 +59,9 @@ func jsonPostBackend(url string, data []byte) ([]byte, error) {
 	return client.JsonPostWithHeaders(url, data, backendHeaders())
 }
 
+// ExecSwap posts with an empty body, params stay in the query. GET is deprecated.
 func (b *Butter) ExecSwap(domain, query string) ([]byte, error) {
-	return jsonGetBackend(fmt.Sprintf("%s%s?%s", domain, UrlOfExecSwap, query))
+	return jsonPostBackend(fmt.Sprintf("%s%s?%s", domain, UrlOfExecSwap, query), nil)
 }
 
 func (b *Butter) RetryMessageIn(domain, query string) ([]byte, error) {
@@ -92,17 +93,14 @@ func (b *Butter) SolCrossIn(domain, query string, reqbody map[string]interface{}
 		return nil, fmt.Errorf("code %d, mess:%s", data.StatusCode, data.Message)
 	}
 
-	if len(data.Data) <= 0 {
-		return nil, fmt.Errorf("data is zero")
-	}
-
-	for _, item := range data.Data {
+	// errno 0 does not mean a route is usable, check every route
+	for _, item := range data.Data.RouteWithTxParams {
 		if len(item.TxParam) > 0 {
 			return &data, nil
 		}
 	}
 
-	for _, item := range data.Data {
+	for _, item := range data.Data.RouteWithTxParams {
 		if item.Error.Response.Errno != 0 {
 			return nil, fmt.Errorf("code %d, mess:%s", item.Error.Response.Errno, item.Error.Response.Message)
 		}
@@ -111,6 +109,9 @@ func (b *Butter) SolCrossIn(domain, query string, reqbody map[string]interface{}
 		}
 	}
 
+	if len(data.Data.RescueFundsTxParams) > 0 {
+		return nil, fmt.Errorf("no swap route, only refund candidates(%d) returned", len(data.Data.RescueFundsTxParams))
+	}
 	return nil, fmt.Errorf("data txParam is zero")
 }
 
