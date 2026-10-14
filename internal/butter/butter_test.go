@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 )
 
@@ -12,8 +13,8 @@ func TestExecSwapSendsBearerToken(t *testing.T) {
 	defer Init("")
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
-			t.Fatalf("method = %s, want GET", r.Method)
+		if r.Method != http.MethodPost {
+			t.Fatalf("method = %s, want POST", r.Method)
 		}
 		if r.URL.Path != UrlOfExecSwap {
 			t.Fatalf("path = %s, want %s", r.URL.Path, UrlOfExecSwap)
@@ -55,11 +56,40 @@ func TestSolCrossInSendsBearerToken(t *testing.T) {
 		if body["orderId"] != "0xabc" {
 			t.Fatalf("orderId = %v, want 0xabc", body["orderId"])
 		}
-		_, _ = w.Write([]byte(`{"errno":0,"statusCode":0,"data":[{"txParam":[{"data":"0x"}]}]}`))
+		_, _ = w.Write([]byte(`{"errno":0,"statusCode":0,"data":{"routeWithTxParams":[{"txParam":[{"data":"0x"}]}]}}`))
 	}))
 	defer srv.Close()
 
 	if _, err := SolCrossIn(srv.URL, "a=b", map[string]interface{}{"orderId": "0xabc"}); err != nil {
 		t.Fatalf("SolCrossIn failed: %v", err)
+	}
+}
+
+func TestSolCrossInReportsRefundOnlyResponse(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"errno":0,"data":{"routeWithTxParams":[],
+			"rescueFundsTxParams":[{"step":"receiveOpenRefund","isRefund":true,"data":"00"}]}}`))
+	}))
+	defer srv.Close()
+
+	_, err := SolCrossIn(srv.URL, "a=b", map[string]interface{}{})
+	if err == nil {
+		t.Fatal("SolCrossIn error = nil, want refund-only error")
+	}
+	if !strings.Contains(err.Error(), "only refund") {
+		t.Fatalf("SolCrossIn error = %q, want it to mention only refund", err.Error())
+	}
+}
+
+func TestSolCrossInReportsRouteBuildError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"errno":0,"data":{"routeWithTxParams":[
+			{"route":{},"error":{"message":"quote expired"}}]}}`))
+	}))
+	defer srv.Close()
+
+	_, err := SolCrossIn(srv.URL, "a=b", map[string]interface{}{})
+	if err == nil || !strings.Contains(err.Error(), "quote expired") {
+		t.Fatalf("SolCrossIn error = %v, want route build error", err)
 	}
 }

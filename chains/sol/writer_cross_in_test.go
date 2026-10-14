@@ -3,6 +3,7 @@ package sol
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -11,12 +12,12 @@ import (
 
 func TestSendSolCrossInTxsContinuesExecuteWhenOpenAlreadyInUse(t *testing.T) {
 	resp := mustSolCrossInResp(t, `{
-		"data": [{
+		"data": {"routeWithTxParams": [{
 			"txParam": [
 				{"step": "receiveOpen", "data": "open-data"},
 				{"step": "receiveExecute", "data": "execute-data"}
 			]
-		}]
+		}]}
 	}`)
 	var calls []string
 	send := func(txParam butter.SolCrossInTxParam, _ int) (string, error) {
@@ -44,12 +45,12 @@ func TestSendSolCrossInTxsContinuesExecuteWhenOpenAlreadyInUse(t *testing.T) {
 
 func TestSendSolCrossInTxsReturnsOtherOpenErrors(t *testing.T) {
 	resp := mustSolCrossInResp(t, `{
-		"data": [{
+		"data": {"routeWithTxParams": [{
 			"txParam": [
 				{"step": "receiveOpen", "data": "open-data"},
 				{"step": "receiveExecute", "data": "execute-data"}
 			]
-		}]
+		}]}
 	}`)
 	errOpen := errors.New("REVERT opcode executed")
 	var calls []string
@@ -75,12 +76,12 @@ func TestSendSolCrossInTxsReturnsOtherOpenErrors(t *testing.T) {
 
 func TestSendSolCrossInTxsKeepsOpenDoneWhenExecuteFailsAfterAlreadyInUse(t *testing.T) {
 	resp := mustSolCrossInResp(t, `{
-		"data": [{
+		"data": {"routeWithTxParams": [{
 			"txParam": [
 				{"step": "receiveOpen", "data": "open-data"},
 				{"step": "receiveExecute", "data": "execute-data"}
 			]
-		}]
+		}]}
 	}`)
 	errExecute := errors.New("execute failed")
 	var calls []string
@@ -103,6 +104,102 @@ func TestSendSolCrossInTxsKeepsOpenDoneWhenExecuteFailsAfterAlreadyInUse(t *test
 		t.Fatalf("tx hashes = %v, want empty", txHashes)
 	}
 	if want := []string{"receiveOpen", "receiveExecute"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("send calls = %v, want %v", calls, want)
+	}
+}
+
+const atomicSwapResp = `{
+	"data": {"routeWithTxParams": [{
+		"txParam": [
+			{"step": "receiveOpenExecute", "data": "open-execute-data"},
+			{"step": "receiveOpen", "data": "open-data"},
+			{"step": "receiveExecute", "data": "execute-data"}
+		]
+	}]}
+}`
+
+func TestSendSolCrossInTxsStopsAfterAtomicOpenExecute(t *testing.T) {
+	resp := mustSolCrossInResp(t, atomicSwapResp)
+	var calls []string
+	send := func(txParam butter.SolCrossInTxParam, _ int) (string, error) {
+		calls = append(calls, txParam.Step)
+		return "atomic-hash", nil
+	}
+
+	txHashes, _, err := sendSolCrossInTxs(resp, false, send)
+	if err != nil {
+		t.Fatalf("sendSolCrossInTxs() error = %v", err)
+	}
+	if want := []string{"receiveOpenExecute"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("send calls = %v, want %v", calls, want)
+	}
+	if want := []string{"atomic-hash"}; !reflect.DeepEqual(txHashes, want) {
+		t.Fatalf("tx hashes = %v, want %v", txHashes, want)
+	}
+}
+
+func TestSendSolCrossInTxsFallsBackToTwoStepWhenAtomicRejected(t *testing.T) {
+	resp := mustSolCrossInResp(t, atomicSwapResp)
+	var calls []string
+	send := func(txParam butter.SolCrossInTxParam, _ int) (string, error) {
+		calls = append(calls, txParam.Step)
+		if txParam.Step == "receiveOpenExecute" {
+			return "", errors.New("Transaction simulation failed: transaction too large")
+		}
+		return txParam.Step + "-hash", nil
+	}
+
+	txHashes, openDone, err := sendSolCrossInTxs(resp, false, send)
+	if err != nil {
+		t.Fatalf("sendSolCrossInTxs() error = %v", err)
+	}
+	if !openDone {
+		t.Fatal("sendSolCrossInTxs() openDone = false, want true")
+	}
+	if want := []string{"receiveOpenExecute", "receiveOpen", "receiveExecute"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("send calls = %v, want %v", calls, want)
+	}
+	if want := []string{"receiveOpen-hash", "receiveExecute-hash"}; !reflect.DeepEqual(txHashes, want) {
+		t.Fatalf("tx hashes = %v, want %v", txHashes, want)
+	}
+}
+
+func TestSendSolCrossInTxsNoFallbackWhenAtomicMayBeOnChain(t *testing.T) {
+	resp := mustSolCrossInResp(t, atomicSwapResp)
+	var calls []string
+	send := func(txParam butter.SolCrossInTxParam, _ int) (string, error) {
+		calls = append(calls, txParam.Step)
+		return "", fmt.Errorf("%w: pending too long", errTxNotConfirmed)
+	}
+
+	_, openDone, err := sendSolCrossInTxs(resp, false, send)
+	if !errors.Is(err, errTxNotConfirmed) {
+		t.Fatalf("sendSolCrossInTxs() error = %v, want %v", err, errTxNotConfirmed)
+	}
+	if openDone {
+		t.Fatal("sendSolCrossInTxs() openDone = true, want false")
+	}
+	if want := []string{"receiveOpenExecute"}; !reflect.DeepEqual(calls, want) {
+		t.Fatalf("send calls = %v, want %v", calls, want)
+	}
+}
+
+func TestSendSolCrossInTxsSendsReceiveDirect(t *testing.T) {
+	resp := mustSolCrossInResp(t, `{
+		"data": {"routeWithTxParams": [{
+			"txParam": [{"step": "receiveDirect", "data": "direct-data"}]
+		}]}
+	}`)
+	var calls []string
+	send := func(txParam butter.SolCrossInTxParam, _ int) (string, error) {
+		calls = append(calls, txParam.Step)
+		return "direct-hash", nil
+	}
+
+	if _, _, err := sendSolCrossInTxs(resp, false, send); err != nil {
+		t.Fatalf("sendSolCrossInTxs() error = %v", err)
+	}
+	if want := []string{"receiveDirect"}; !reflect.DeepEqual(calls, want) {
 		t.Fatalf("send calls = %v, want %v", calls, want)
 	}
 }
